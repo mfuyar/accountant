@@ -1,0 +1,7 @@
+export const initialProjects = []
+export const initialCategories = []
+export const initialVendors = []
+export const initialInvoices = []
+export const initialTransactions = []
+export const initialPayments = []
+export const sampleImportRows = []
