@@ -301,6 +301,11 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, onAddIncome, o
               {uploadingDrawSheet ? <span className="loading-indicator"><span className="spinner" aria-hidden="true" />Reading the draw sheet…</span> : null}
               {drawDocument ? <span>Attached: {drawDocument.name}</span> : null}
               {!uploadingDrawSheet && uploadStatus ? <span role="status">{uploadStatus}</span> : null}
+              {!uploadingDrawSheet && drawDocument ? (
+                <p className="loan-draw-unsaved-banner" role="status">
+                  ⚠ Not saved yet — review the amount, date, and lot breakdown below, then click "{editingIncomeId != null ? 'Save income changes' : 'Add income'}" at the bottom of this form.
+                </p>
+              ) : null}
               <div className="loan-draw-lots">
                 <div className="loan-draw-lots-header">
                   <span>Lot breakdown (must total the amount above, kept for audit)</span>

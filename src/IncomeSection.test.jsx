@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import IncomeSection from './IncomeSection'
 
@@ -62,6 +62,37 @@ describe('IncomeSection', () => {
       ],
       attachments: [],
     })
+  })
+
+  it('shows a prominent "not saved yet" banner after uploading a draw sheet, until the form is actually submitted', async () => {
+    const onAddIncome = vi.fn()
+    const onUploadDocument = vi.fn().mockResolvedValue({
+      documentId: 'doc-1', storageBucket: 'accounting-documents', storagePath: '7/draw-sheet.pdf', name: 'draw-sheet.pdf', mimeType: 'application/pdf', size: 100,
+    })
+    render(<IncomeSection incomes={[]} projects={[{ id: 7, name: 'Main Project' }]} onAddIncome={onAddIncome} onEditIncome={() => {}} onDeleteIncome={() => {}} onUploadDocument={onUploadDocument} />)
+
+    fireEvent.change(screen.getByLabelText('Income type'), { target: { value: 'loan_draw' } })
+    expect(screen.queryByText(/Not saved yet/)).not.toBeInTheDocument()
+
+    const file = new File(['draw'], 'draw-sheet.pdf', { type: 'application/pdf' })
+    fireEvent.change(screen.getByLabelText('Upload loan draw sheet'), { target: { files: [file] } })
+
+    expect(await screen.findByText(/Not saved yet/)).toBeInTheDocument()
+    expect(screen.getByText('Attached: draw-sheet.pdf')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText(/income description/i), { target: { value: 'Providence draw 2' } })
+    fireEvent.change(screen.getByLabelText(/income source/i), { target: { value: 'Providence Bank' } })
+    fireEvent.change(screen.getByLabelText(/income amount/i), { target: { value: '30000' } })
+    fireEvent.change(screen.getByLabelText(/income date/i), { target: { value: '2026-07-18' } })
+    fireEvent.change(screen.getByLabelText('Lot 2 draw amount'), { target: { value: '10000' } })
+    fireEvent.change(screen.getByLabelText('Lot 3 draw amount'), { target: { value: '10000' } })
+    fireEvent.change(screen.getByLabelText('Lot 4 draw amount'), { target: { value: '10000' } })
+    fireEvent.click(screen.getByRole('button', { name: /add income/i }))
+
+    expect(onAddIncome).toHaveBeenCalledWith(expect.objectContaining({
+      attachments: [expect.objectContaining({ id: 'doc-1', name: 'draw-sheet.pdf' })],
+    }))
+    await waitFor(() => expect(screen.queryByText(/Not saved yet/)).not.toBeInTheDocument())
   })
 
   it('splits the amount evenly across the 3 lots, absorbing the rounding remainder in the last lot', () => {

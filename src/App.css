@@ -1000,6 +1000,19 @@ p.check-link-summary {
   font-weight: 700;
 }
 
+.loan-draw-unsaved-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #fbbf24;
+  border-radius: 10px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 .loan-draw-lots {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
