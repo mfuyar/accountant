@@ -6,6 +6,7 @@ import ClassificationPage from './ClassificationPage'
 import IncomeSection from './IncomeSection'
 import LotCommitments from './LotCommitments'
 import SpendingByJob from './SpendingByJob'
+import TaxAudit from './TaxAudit'
 import BankDashboard from './BankDashboard'
 import AccessAdmin from './AccessAdmin'
 import CheckPrinting from './CheckPrinting'
@@ -1155,6 +1156,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
             ['income', 'Income'],
             ['bank', 'Bank'],
             ['checks', 'Checks'],
+            ['audit', 'Tax & Audit'],
             ['review', 'Review'],
             ['access', 'Access'],
           ].map(([section, label]) => (
@@ -1598,6 +1600,14 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
         onUpdateTemplate={handleProjectCheckTemplate}
         onUpdateFunding={handleProjectCheckFunding}
         onUpdateLot={handleProjectCheckLot}
+      /> : null}
+
+      {showProjectSection('audit') ? <TaxAudit
+        checks={projectChecks.filter((check) => String(check.projectId) === String(activeProjectId))}
+        incomes={projectIncomes}
+        activeCosts={activeDevelopmentCosts}
+        lotCommitments={projectLotCommitments}
+        projectName={activeProject?.name}
       /> : null}
 
       {showProjectSection('overview') ? <section className="panel">
