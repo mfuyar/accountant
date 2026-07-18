@@ -21,6 +21,98 @@ const calibrationTemplates = [
   { key: 'flagstar-2', bank: 'Flagstar Bank', className: 'flagstar' },
 ]
 
+// Calibrated per bank on real HP LaserJet test prints — the two preprinted templates don't line
+// up identically, so top/left are both split by bank. This is the base position, so the "Move
+// individual fields" inputs correctly start at 0 — they represent further adjustment on top of
+// this calibration, not the calibration itself.
+const checkFieldCoordinates = {
+  datePrefix: { top: { bofa: 0.6, providence: 0.72 }, left: { bofa: 3.19, providence: 3.3 } },
+  dateYear: { top: { bofa: 0.6, providence: 0.72 }, left: { bofa: 4.44, providence: 4.55 } },
+  payee: { top: { bofa: 1.04, providence: 1.11 }, left: { bofa: 1.05, providence: 0.82 } },
+  amount: { top: { bofa: 1.04, providence: 1.12 }, left: { bofa: 4.26, providence: 4.33 } },
+  words: { top: { bofa: 1.38, providence: 1.42 }, left: { bofa: 0.5, providence: 0.18 } },
+  memo: { top: { bofa: 2.15, providence: 2.21 }, left: { bofa: 0.48, providence: 0.46 } },
+}
+
+const fieldCoordinateLabel = (field, templateKey, offsetIn = { x: 0, y: 0 }) => {
+  const entry = checkFieldCoordinates[field]
+  const left = (entry.left[templateKey] ?? entry.left.bofa) + offsetIn.x
+  const top = (entry.top[templateKey] ?? entry.top.bofa) + offsetIn.y
+  return `top ${top.toFixed(2)}in · left ${left.toFixed(2)}in`
+}
+
+const CHECK_WIDTH_IN = 6
+const CHECK_HEIGHT_IN = 2.7
+const editableFields = ['date', 'payee', 'amount', 'words', 'memo']
+const editableFieldLabels = { date: 'Date', payee: 'Payee', amount: 'Amount', words: 'Amount in words', memo: 'Memo' }
+
+const zeroFieldOffsets = { date: { x: '0', y: '0' }, payee: { x: '0', y: '0' }, amount: { x: '0', y: '0' }, words: { x: '0', y: '0' }, memo: { x: '0', y: '0' } }
+
+// Field offsets are per-bank: the two preprinted templates don't line up identically, so a
+// correction that's right for Providence (found by testing) can be wrong for Bank of America.
+// Only Amount has a confirmed non-zero default so far — everything else starts at 0 until
+// verified against a real test print for that bank.
+const defaultFieldOffsets = {
+  bofa: zeroFieldOffsets,
+  providence: { ...zeroFieldOffsets, amount: { x: '0.06', y: '-0.01' } },
+}
+
+const FIELD_OFFSETS_STORAGE_KEY = 'greenfort-check-field-offsets'
+
+const loadSavedFieldOffsets = () => {
+  try {
+    const raw = window.localStorage?.getItem(FIELD_OFFSETS_STORAGE_KEY)
+    if (!raw) return defaultFieldOffsets
+    const parsed = JSON.parse(raw)
+    return {
+      bofa: { ...defaultFieldOffsets.bofa, ...parsed.bofa },
+      providence: { ...defaultFieldOffsets.providence, ...parsed.providence },
+    }
+  } catch {
+    return defaultFieldOffsets
+  }
+}
+
+const fieldOffsetIn = (offsets, templateKey, field) => ({
+  x: Number(offsets?.[templateKey]?.[field]?.x) || 0,
+  y: Number(offsets?.[templateKey]?.[field]?.y) || 0,
+})
+
+// Applies a field's inch offset directly to its print coordinates (both are already in inches,
+// so no unit conversion is needed here — see previewFieldStyle for the responsive preview, which
+// needs percent).
+const printFieldStyle = (coordKey, offsets, field, templateKey) => {
+  const entry = checkFieldCoordinates[coordKey]
+  const top = entry.top[templateKey] ?? entry.top.bofa
+  const left = entry.left[templateKey] ?? entry.left.bofa
+  const offset = fieldOffsetIn(offsets, templateKey, field)
+  return { top: `${top + offset.y}in`, left: `${left + offset.x}in` }
+}
+
+// Percent equivalent of the checkFieldCoordinates calibration above, expressed relative to the
+// live preview's own box (which always represents a 6 x 2.7in check regardless of how large the
+// box is rendered on screen). Inches are converted to percent of that fixed conceptual size so
+// the nudge amount looks right at any zoom.
+const previewFieldBase = {
+  date: { top: { bofa: 15.445, providence: 19.889 }, left: { bofa: 50.834, providence: 52.667 } },
+  payee: { top: { bofa: 34.296, providence: 36.889 }, left: { bofa: 19.333, providence: 14 } },
+  amount: { top: { bofa: 34.296, providence: 37.259 }, right: { bofa: 13.334, providence: 12.167 } },
+  words: { top: { bofa: 48.038, providence: 49.519 }, left: { bofa: 5, providence: 3 } },
+  memo: { top: { bofa: 76.297, providence: 78.519 }, left: { bofa: 8.667, providence: 7.667 } },
+}
+
+const previewFieldStyle = (field, offsets, templateKey) => {
+  const base = previewFieldBase[field]
+  const offset = fieldOffsetIn(offsets, templateKey, field)
+  const offsetXPct = (offset.x / CHECK_WIDTH_IN) * 100
+  const offsetYPct = (offset.y / CHECK_HEIGHT_IN) * 100
+  const top = base.top[templateKey] ?? base.top.bofa
+  const style = { top: `${top + offsetYPct}%` }
+  if (base.right) style.right = `${(base.right[templateKey] ?? base.right.bofa) - offsetXPct}%`
+  else style.left = `${(base.left[templateKey] ?? base.left.bofa) + offsetXPct}%`
+  return style
+}
+
 const checkDateParts = (date) => {
   const [year, month, day] = String(date || '').split('-')
   return year && month && day ? { prefix: `${month}/${day}/`, year: year.slice(-2) } : { prefix: date, year: '' }
@@ -61,7 +153,10 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
   const [printingCarrierGuide, setPrintingCarrierGuide] = useState(false)
   const [horizontalOffset, setHorizontalOffset] = useState('0')
   const [verticalOffset, setVerticalOffset] = useState('0')
-  const [printerPreset, setPrinterPreset] = useState('direct')
+  const [fieldOffsets, setFieldOffsets] = useState(loadSavedFieldOffsets)
+  const [fieldOffsetsExpanded, setFieldOffsetsExpanded] = useState(false)
+  const [fieldOffsetsSavedMessage, setFieldOffsetsSavedMessage] = useState('')
+  const [printerPreset, setPrinterPreset] = useState('letter_voucher')
   const [attachmentTarget, setAttachmentTarget] = useState('')
   const [fundingTarget, setFundingTarget] = useState('')
   const [lotTarget, setLotTarget] = useState('')
@@ -273,6 +368,20 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
     setVerticalOffset('0')
   }
 
+  const changeFieldOffset = (bankKey, field, axis, value) => {
+    setFieldOffsets((current) => ({ ...current, [bankKey]: { ...current[bankKey], [field]: { ...current[bankKey][field], [axis]: value } } }))
+    setFieldOffsetsSavedMessage('')
+  }
+
+  const saveFieldOffsets = () => {
+    try {
+      window.localStorage?.setItem(FIELD_OFFSETS_STORAGE_KEY, JSON.stringify(fieldOffsets))
+      setFieldOffsetsSavedMessage('Saved — these positions will load automatically next time.')
+    } catch {
+      setFieldOffsetsSavedMessage('Could not save to this browser. Positions will reset next time you open the app.')
+    }
+  }
+
   const changeSavedTemplate = async (nextTemplateKey) => {
     if (!viewingCheck || !onUpdateTemplate) {
       setMessage({ type: 'error', text: 'Changing the saved check template is unavailable. Sign in and retry.' })
@@ -366,24 +475,46 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
         <p className="hero-copy">For preprinted check stock. Store only a safe account label—never enter a routing or full account number.</p>
         <div className="check-print-instructions">
           <strong>Printer setup for this check</strong>
-          <span>{printerPreset === 'hp1102_carrier' ? 'Paper: Letter carrier with the 6 × 2.7 check mounted at the guide position' : printerPreset === 'direct_rotated' ? 'Paper: custom 2.7 × 6 inches · Feed: narrow 2.7-inch edge entering first (as fed into the P1102 priority slot), printed face up · Content is pre-rotated 90° to read correctly' : 'Paper: custom 6 × 3 inches · Tape a 0.3-inch blank tab below the check’s bottom edge so the fed sheet totals 6 × 3 inches · Horizontal feed: 6-inch side across the tray, 3-inch edge entering first, printed face up'} · Scale: 100% · Margins: none · Headers and footers: off</span>
+          <span>{printerPreset === 'letter_voucher' ? 'Paper: Letter-size voucher check stock (8.5 × 11 in) — the check prints as a tall 2.7 × 6 in panel, centered horizontally near the top of the sheet, feed it like ordinary Letter paper' : printerPreset === 'hp1102_carrier' ? 'Paper: Letter carrier with the 6 × 2.7 check mounted at the guide position' : printerPreset === 'direct_rotated' ? 'Paper: custom 2.7 × 6 inches · Feed: narrow 2.7-inch edge entering first (as fed into the P1102 priority slot), printed face up · Content is pre-rotated 90° to read correctly' : 'Paper: custom 6 × 3 inches · Tape a 0.3-inch blank tab below the check’s bottom edge so the fed sheet totals 6 × 3 inches · Horizontal feed: 6-inch side across the tray, 3-inch edge entering first, printed face up'} · Scale: 100% · Margins: none · Headers and footers: off</span>
           <label className="printer-preset-control">Printer feed preset
             <select aria-label="Printer feed preset" value={printerPreset} onChange={(event) => changePrinterPreset(event.target.value)}>
-              <option value="hp1102_carrier">HP LaserJet P1102 — carrier sheet (recommended)</option>
+              <option value="letter_voucher">Letter-size voucher check — direct print (recommended)</option>
+              <option value="hp1102_carrier">HP LaserJet P1102 — carrier sheet</option>
               <option value="direct">6 × 3-inch page layout — needs a 0.3in tab on the P1102</option>
               <option value="direct_rotated">P1102 narrow-edge feed, rotated 90° — not supported on the P1102</option>
             </select>
           </label>
           <div className="check-alignment-controls">
-            <label>Move right / left (inches)<input aria-label="Horizontal check print adjustment" type="number" min={printerPreset === 'hp1102_carrier' ? '-0.75' : '-2'} max={printerPreset === 'hp1102_carrier' ? '0.75' : '2'} step="0.01" value={horizontalOffset} onChange={(event) => setHorizontalOffset(event.target.value)} /></label>
+            <label>Move right / left (inches)<input aria-label="Horizontal check print adjustment" type="number" min={printerPreset === 'hp1102_carrier' || printerPreset === 'letter_voucher' ? '-0.75' : '-2'} max={printerPreset === 'hp1102_carrier' || printerPreset === 'letter_voucher' ? '0.75' : '2'} step="0.01" value={horizontalOffset} onChange={(event) => setHorizontalOffset(event.target.value)} /></label>
             <label>Move down / up (inches)<input aria-label="Vertical check print adjustment" type="number" min="-1" max="1" step="0.01" value={verticalOffset} onChange={(event) => setVerticalOffset(event.target.value)} /></label>
           </div>
-          <small>{printerPreset === 'hp1102_carrier' ? 'Use a laser-printer-safe carrier. Mount the check centered horizontally — 1.25 inches from each of the Letter sheet’s left and right edges — and 1 inch from the top, matching the printable guide — these offsets also shift the guide’s placement box, so print it again after adjusting to confirm the new mounting spot.' : printerPreset === 'direct_rotated' ? 'HP lists the P1102’s minimum custom paper size as 3 × 5 in. This page is only 2.7 in wide, below that floor — expect blank output. Use the 6 × 3-inch direct mode or carrier-sheet mode instead.' : 'HP lists the P1102’s minimum custom paper size as 3 × 5 in. The check alone (2.7 in) is below that floor, so this mode assumes a 0.3-inch blank paper tab taped to the check’s bottom edge to reach 3 in — untested against a real 3 × 5 in floor, verify before trusting it with a real check.'} Positive values fine-tune printing right or down.</small>
-          {printerPreset === 'hp1102_carrier' ? <div className="button-row"><button type="button" className="secondary-button" onClick={printCarrierGuide}>Print carrier placement guide</button></div> : printerPreset === 'direct_rotated' ? <p className="printer-compatibility-warning"><strong>Not supported on the HP P1102:</strong> its minimum custom paper size is 3 × 5 in, and this page is 2.7 in on its short edge — below that floor. Switch to carrier-sheet mode for reliable placement.</p> : <p className="printer-compatibility-warning"><strong>Experimental:</strong> pads the check to 6 × 3 in with a blank tab to try to clear the P1102’s 3 × 5 in minimum. Confirm with the alignment test before risking a real check.</p>}
+          <div className="check-field-offset-controls">
+            <div className="check-field-offset-toggle-row">
+              <button type="button" className="check-field-offset-toggle" aria-expanded={fieldOffsetsExpanded} onClick={() => setFieldOffsetsExpanded((current) => !current)}>
+                <strong>Move individual fields (inches)</strong>
+                <span className="check-field-offset-toggle-icon" aria-hidden="true">{fieldOffsetsExpanded ? '▾' : '▸'}</span>
+              </button>
+              <span className="check-field-offset-bank">Editing: {previewTemplate.label}</span>
+            </div>
+            {fieldOffsetsExpanded ? <>
+              <span>Nudges this field only, on top of the position above — shows live in the preview to the right. Saved separately per bank, since the two templates don’t line up identically.</span>
+              {editableFields.map((field) => <div key={field} className="check-field-offset-row">
+                <span>{editableFieldLabels[field]}</span>
+                <label>Right / left<input aria-label={`${editableFieldLabels[field]} horizontal adjustment`} type="number" min="-1" max="1" step="0.01" value={fieldOffsets[previewData.templateKey || 'bofa'][field].x} onChange={(event) => changeFieldOffset(previewData.templateKey || 'bofa', field, 'x', event.target.value)} /></label>
+                <label>Down / up<input aria-label={`${editableFieldLabels[field]} vertical adjustment`} type="number" min="-1" max="1" step="0.01" value={fieldOffsets[previewData.templateKey || 'bofa'][field].y} onChange={(event) => changeFieldOffset(previewData.templateKey || 'bofa', field, 'y', event.target.value)} /></label>
+              </div>)}
+              <div className="button-row">
+                <button type="button" className="secondary-button" onClick={saveFieldOffsets}>Save field positions</button>
+              </div>
+              {fieldOffsetsSavedMessage ? <span className="check-field-offset-saved" role="status">{fieldOffsetsSavedMessage}</span> : null}
+            </> : null}
+          </div>
+          <small>{printerPreset === 'letter_voucher' ? 'Tall 2.7 × 6 in check, centered horizontally with a small 0.25 in top margin — rotated internally so the printed text still reads normally.' : printerPreset === 'hp1102_carrier' ? 'Use a laser-printer-safe carrier. Mount the check centered horizontally — 1.25 inches from each of the Letter sheet’s left and right edges — and 1 inch from the top, matching the printable guide — these offsets also shift the guide’s placement box, so print it again after adjusting to confirm the new mounting spot.' : printerPreset === 'direct_rotated' ? 'HP lists the P1102’s minimum custom paper size as 3 × 5 in. This page is only 2.7 in wide, below that floor — expect blank output. Use the 6 × 3-inch direct mode or carrier-sheet mode instead.' : 'HP lists the P1102’s minimum custom paper size as 3 × 5 in. The check alone (2.7 in) is below that floor, so this mode assumes a 0.3-inch blank paper tab taped to the check’s bottom edge to reach 3 in — untested against a real 3 × 5 in floor, verify before trusting it with a real check.'} Positive values fine-tune printing right or down.</small>
+          {printerPreset === 'hp1102_carrier' ? <div className="button-row"><button type="button" className="secondary-button" onClick={printCarrierGuide}>Print carrier placement guide</button></div> : printerPreset === 'direct_rotated' ? <p className="printer-compatibility-warning"><strong>Not supported on the HP P1102:</strong> its minimum custom paper size is 3 × 5 in, and this page is 2.7 in on its short edge — below that floor. Switch to carrier-sheet mode for reliable placement.</p> : printerPreset === 'direct' ? <p className="printer-compatibility-warning"><strong>Experimental:</strong> pads the check to 6 × 3 in with a blank tab to try to clear the P1102’s 3 × 5 in minimum. Confirm with the alignment test before risking a real check.</p> : null}
         </div>
         <div className="check-template-test-card">
-          <div><strong>Alignment test—nothing is saved</strong><span>{printerPreset === 'hp1102_carrier' ? 'Prints the current printer preset’s Letter carrier page' : printerPreset === 'direct_rotated' ? 'Prints the current printer preset’s 2.7 × 6-inch rotated page' : 'Prints the current printer preset’s 6 × 3-inch page'} using the form values or automatic mock data.</span></div>
-          <button type="button" className="action-button" onClick={printMockCheck}>{printerPreset === 'hp1102_carrier' ? 'Print Letter carrier mock alignment check' : printerPreset === 'direct_rotated' ? 'Print 2.7 × 6 rotated mock alignment check' : 'Print 6 × 3 mock alignment check'}</button>
+          <div><strong>Alignment test—nothing is saved</strong><span>{printerPreset === 'letter_voucher' ? 'Prints the current printer preset’s Letter-size voucher page' : printerPreset === 'hp1102_carrier' ? 'Prints the current printer preset’s Letter carrier page' : printerPreset === 'direct_rotated' ? 'Prints the current printer preset’s 2.7 × 6-inch rotated page' : 'Prints the current printer preset’s 6 × 3-inch page'} using the form values or automatic mock data.</span></div>
+          <button type="button" className="action-button" onClick={printMockCheck}>{printerPreset === 'letter_voucher' ? 'Print Letter voucher mock alignment check' : printerPreset === 'hp1102_carrier' ? 'Print Letter carrier mock alignment check' : printerPreset === 'direct_rotated' ? 'Print 2.7 × 6 rotated mock alignment check' : 'Print 6 × 3 mock alignment check'}</button>
         </div>
         <div className="check-template-test-card">
           <div><strong>Full-size template test sheet</strong><span>Four checks fit on one Letter page: two Bank of America and two Flagstar.</span></div>
@@ -444,16 +575,15 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
         <div className={`live-check-preview ${previewData.templateKey || 'bofa'}`} aria-label={viewingCheck ? `Saved check preview ${viewingCheck.checkNumber}` : 'Live check preview'}>
           <div className="preview-company"><strong>Green Fort LLC</strong><span>200 Ross Bluff Ct</span><span>Holly Springs, NC 27540-6040</span></div>
           <strong className="preview-check-number">{displayCheckNumber(previewData.checkNumber, viewingCheck ? '' : '###')}</strong>
-          <div className="preview-date-line"><span className="entered">{checkDateParts(previewData.date).prefix}</span><span>20</span><span className="entered year">{checkDateParts(previewData.date).year}</span></div>
+          <div className="preview-date-line" style={previewFieldStyle('date', fieldOffsets, previewData.templateKey || 'bofa')}><span className="entered">{checkDateParts(previewData.date).prefix}</span><span>20</span><span className="entered year">{checkDateParts(previewData.date).year}</span></div>
           <span className="preview-pay-label">{previewData.templateKey === 'providence' ? <>PAY TO THE<br />ORDER OF</> : <>Pay to the<br />Order of</>}</span>
-          <span className="preview-payee entered">{previewData.payee || 'Payee name appears here'}</span>
-          <span className="preview-dollar">$</span>
-          <span className="preview-amount entered">{Number(previewData.amount) > 0 ? numericAmount.format(Number(previewData.amount)) : '0.00'}</span>
-          <span className="preview-words entered">{Number(previewData.amount) > 0 ? amountToCheckWords(previewData.amount).replace(/ Dollars$/, '') : 'Amount in words'}</span>
+          <span className="preview-payee entered" style={previewFieldStyle('payee', fieldOffsets, previewData.templateKey || 'bofa')}>{previewData.payee || 'Payee name appears here'}</span>
+          <span className="preview-amount entered" style={previewFieldStyle('amount', fieldOffsets, previewData.templateKey || 'bofa')}><span className="preview-dollar">$</span>{Number(previewData.amount) > 0 ? numericAmount.format(Number(previewData.amount)) : '0.00'}</span>
+          <span className="preview-words entered" style={previewFieldStyle('words', fieldOffsets, previewData.templateKey || 'bofa')}>{Number(previewData.amount) > 0 ? amountToCheckWords(previewData.amount).replace(/ Dollars$/, '') : 'Amount in words'}</span>
           <span className="preview-dollars">Dollars</span>
           <strong className="preview-bank">{previewTemplate.label}</strong>
           <span className="preview-for">For</span>
-          <span className="preview-memo entered">{previewData.memo || 'Memo'}</span>
+          <span className="preview-memo entered" style={previewFieldStyle('memo', fieldOffsets, previewData.templateKey || 'bofa')}>{previewData.memo || 'Memo'}</span>
           <span className="preview-signature">Authorized signature</span>
           <span className="preview-micr">⑆ ROUTING MASKED ⑆ ACCOUNT MASKED ⑈</span>
         </div>
@@ -504,14 +634,23 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
         '--check-offset-y': `${(printerPreset === 'hp1102_carrier' ? 1 : 0) + (Number(verticalOffset) || 0)}in`,
       }}
     >
-      <style>{printerPreset === 'hp1102_carrier' ? '@page { size: 8.5in 11in; margin: 0; }' : printerPreset === 'direct_rotated' ? '@page { size: 2.7in 6in; margin: 0; }' : '@page { size: 6in 3in; margin: 0; }'}</style>
+      <style>{printerPreset === 'letter_voucher' || printerPreset === 'hp1102_carrier' ? '@page { size: 8.5in 11in; margin: 0; }' : printerPreset === 'direct_rotated' ? '@page { size: 2.7in 6in; margin: 0; }' : '@page { size: 6in 3in; margin: 0; }'}</style>
       <div className="print-check-fields">
-        <span className="print-check-field print-check-date-prefix">{checkDateParts(printingCheck.date).prefix}</span>
-        <span className="print-check-field print-check-date-year">{checkDateParts(printingCheck.date).year}</span>
-        <span className="print-check-field print-check-payee-value">{printingCheck.payee}</span>
-        <span className="print-check-field print-check-amount-value">{numericAmount.format(printingCheck.amount)}</span>
-        <span className="print-check-field print-check-words-value">{amountToCheckWords(printingCheck.amount).replace(/ Dollars$/, '')}</span>
-        <span className="print-check-field print-check-memo-value">{printingCheck.memo}</span>
+        {printerPreset === 'letter_voucher' && printingCheck.status === 'mock' ? <div className="print-check-mock-outline" aria-label="Check outline for alignment reference">6 × 2.7in check area</div> : null}
+        <span className="print-check-field print-check-date-prefix" style={printFieldStyle('datePrefix', fieldOffsets, 'date', printingCheck.templateKey)}>{checkDateParts(printingCheck.date).prefix}</span>
+        <span className="print-check-field print-check-date-year" style={printFieldStyle('dateYear', fieldOffsets, 'date', printingCheck.templateKey)}>{checkDateParts(printingCheck.date).year}</span>
+        <span className="print-check-field print-check-payee-value" style={printFieldStyle('payee', fieldOffsets, 'payee', printingCheck.templateKey)}>{printingCheck.payee}</span>
+        <span className="print-check-field print-check-amount-value" style={printFieldStyle('amount', fieldOffsets, 'amount', printingCheck.templateKey)}>{numericAmount.format(printingCheck.amount)}</span>
+        <span className="print-check-field print-check-words-value" style={printFieldStyle('words', fieldOffsets, 'words', printingCheck.templateKey)}>{amountToCheckWords(printingCheck.amount).replace(/ Dollars$/, '')}</span>
+        <span className="print-check-field print-check-memo-value" style={printFieldStyle('memo', fieldOffsets, 'memo', printingCheck.templateKey)}>{printingCheck.memo}</span>
+        {printingCheck.status === 'mock' ? <>
+          <span className="print-check-field print-check-coord-label print-check-date-prefix" style={printFieldStyle('datePrefix', fieldOffsets, 'date', printingCheck.templateKey)} aria-label="Date field coordinates">{fieldCoordinateLabel('datePrefix', printingCheck.templateKey, fieldOffsetIn(fieldOffsets, printingCheck.templateKey, 'date'))}</span>
+          <span className="print-check-field print-check-coord-label print-check-date-year" style={printFieldStyle('dateYear', fieldOffsets, 'date', printingCheck.templateKey)} aria-label="Date year field coordinates">{fieldCoordinateLabel('dateYear', printingCheck.templateKey, fieldOffsetIn(fieldOffsets, printingCheck.templateKey, 'date'))}</span>
+          <span className="print-check-field print-check-coord-label print-check-payee-value" style={printFieldStyle('payee', fieldOffsets, 'payee', printingCheck.templateKey)} aria-label="Payee field coordinates">{fieldCoordinateLabel('payee', printingCheck.templateKey, fieldOffsetIn(fieldOffsets, printingCheck.templateKey, 'payee'))}</span>
+          <span className="print-check-field print-check-coord-label print-check-amount-value" style={printFieldStyle('amount', fieldOffsets, 'amount', printingCheck.templateKey)} aria-label="Amount field coordinates">{fieldCoordinateLabel('amount', printingCheck.templateKey, fieldOffsetIn(fieldOffsets, printingCheck.templateKey, 'amount'))}</span>
+          <span className="print-check-field print-check-coord-label print-check-words-value" style={printFieldStyle('words', fieldOffsets, 'words', printingCheck.templateKey)} aria-label="Amount in words field coordinates">{fieldCoordinateLabel('words', printingCheck.templateKey, fieldOffsetIn(fieldOffsets, printingCheck.templateKey, 'words'))}</span>
+          <span className="print-check-field print-check-coord-label print-check-memo-value" style={printFieldStyle('memo', fieldOffsets, 'memo', printingCheck.templateKey)} aria-label="Memo field coordinates">{fieldCoordinateLabel('memo', printingCheck.templateKey, fieldOffsetIn(fieldOffsets, printingCheck.templateKey, 'memo'))}</span>
+        </> : null}
       </div>
     </section>, document.body) : null}
     {printingTemplateSheet ? createPortal(<section className="print-template-sheet" aria-label="Printable BOFA and Flagstar template sheet">

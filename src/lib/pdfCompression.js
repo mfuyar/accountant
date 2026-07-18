@@ -1,8 +1,5 @@
-import * as pdfjsLib from 'pdfjs-dist'
-import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { PDFDocument } from 'pdf-lib'
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl
+import { pdfjsLib } from './pdfjsSetup'
 
 // Rasterizes each page of an oversized PDF (typically scanned commitment letters / plot plans)
 // and rebuilds a smaller PDF from re-compressed JPEG pages. Browsers have no native PDF

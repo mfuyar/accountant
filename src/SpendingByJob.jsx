@@ -10,13 +10,34 @@ const currency = new Intl.NumberFormat('en-US', {
 const allLots = ['Lot 1', 'Lot 2', 'Lot 3', 'Lot 4']
 const lotKeysBySourceKey = { lot_1: 'Lot 1', lot_2: 'Lot 2', lot_3: 'Lot 3', lot_4: 'Lot 4' }
 
+// "Lot Cost" is a real job row (not job-specific work like framing or plumbing) meant to capture
+// project-wide development cost — it has no per-check spending of its own to match, so instead of
+// showing $0, it's driven directly by the project's total development cost split evenly per lot.
+const SHARED_DEVELOPMENT_COST_JOB_NAME = 'Lot Cost'
+
 const emptyDrafts = []
 const emptyChecks = []
 const emptyCosts = []
 
-function SpendingByJob({ constructionDrafts = emptyDrafts, checks = emptyChecks, activeCosts = emptyCosts }) {
+function SpendingByJob({ constructionDrafts = emptyDrafts, checks = emptyChecks, activeCosts = emptyCosts, sharedDevelopmentCostTotal = 0 }) {
   const rows = useMemo(() => {
+    const sharedLotCost = sharedDevelopmentCostTotal / allLots.length
+
     return constructionDrafts.map((draft) => {
+      if (draft.name === SHARED_DEVELOPMENT_COST_JOB_NAME) {
+        const byLot = {}
+        allLots.forEach((lot) => { byLot[lot] = sharedLotCost })
+        return {
+          id: draft.id,
+          name: draft.name,
+          estimatedByLot: byLot,
+          estimatedTotal: sharedDevelopmentCostTotal,
+          spentByLot: byLot,
+          spentTotal: sharedDevelopmentCostTotal,
+          unassignedSpent: 0,
+        }
+      }
+
       const estimatedByLot = {}
       allLots.forEach((lot) => { estimatedByLot[lot] = 0 })
       Object.entries(draft.sourceEstimates || {}).forEach(([key, value]) => {
@@ -51,7 +72,7 @@ function SpendingByJob({ constructionDrafts = emptyDrafts, checks = emptyChecks,
         unassignedSpent,
       }
     })
-  }, [constructionDrafts, checks, activeCosts])
+  }, [constructionDrafts, checks, activeCosts, sharedDevelopmentCostTotal])
 
   const grandEstimatedByLot = useMemo(() => {
     const totals = {}
@@ -80,7 +101,7 @@ function SpendingByJob({ constructionDrafts = emptyDrafts, checks = emptyChecks,
           <strong>{currency.format(grandSpent)} of {currency.format(grandEstimated)}</strong>
         </div>
       </div>
-      <p className="hero-copy">Spending is matched to a job by the cost each check is attached to (Check Printing → "Attach this check to"), split by whichever lot the check is tagged with. Checks attached to a job's cost but not tagged with a lot show up as "unassigned."</p>
+      <p className="hero-copy">Spending is matched to a job by the cost each check is attached to (Check Printing → "Attach this check to"), split by whichever lot the check is tagged with. Checks attached to a job's cost but not tagged with a lot show up as "unassigned." "Lot Cost" is driven by the project's total development cost, split evenly across all 4 lots.</p>
 
       <div className="spending-by-job-scroll">
         <table className="spending-by-job-table">
@@ -95,7 +116,7 @@ function SpendingByJob({ constructionDrafts = emptyDrafts, checks = emptyChecks,
             {rows.length === 0 ? (
               <tr><td colSpan={allLots.length + 2}>No construction draft jobs recorded yet.</td></tr>
             ) : rows.map((row) => (
-              <tr key={row.id}>
+              <tr key={row.id} className={row.name === SHARED_DEVELOPMENT_COST_JOB_NAME ? 'spending-by-job-shared-row' : ''}>
                 <td>{row.name}</td>
                 {allLots.map((lot) => (
                   <td key={lot}>

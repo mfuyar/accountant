@@ -111,7 +111,20 @@ const mergeAttachmentByLabel = (existingAttachments, attachment, documentDate) =
   return { attachments: next, note: `flagged duplicate "${attachment.label}" for manual review (date unclear)` }
 }
 
-const cleanDocumentName = (fileName) => fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim() || fileName
+// Uploaded filenames are often smashed-together names with no spaces (e.g. a buyer's contract
+// saved as "MuhemmetUyarAggreeement.pdf") — split camelCase/PascalCase into words and fix the
+// common "Aggreement" typo so the document list reads like a normal name instead of a filename.
+const cleanDocumentName = (fileName) => {
+  const base = fileName.replace(/\.[^.]+$/, '')
+  const spaced = base
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const corrected = spaced.replace(/\bAg{1,3}re{1,3}ments?\b/gi, (match) => (/s$/i.test(match) ? 'Agreements' : 'Agreement'))
+  return corrected || fileName
+}
 
 const truncateFileName = (name, max = 42) => {
   if (!name || name.length <= max) return name
@@ -136,7 +149,7 @@ const lotDraftsFromCommitments = (lotCommitments) => {
   return drafts
 }
 
-function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyIncomes, checks = emptyChecks, activeProjectId, onSaveLotCommitment, onUploadDocument, onOpenDocument, onGetDocumentUrl }) {
+function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyIncomes, checks = emptyChecks, activeProjectId, onSaveLotCommitment, onUploadDocument, onOpenDocument, onGetDocumentUrl, sharedDevelopmentCostTotal = 0 }) {
   const [lotDrafts, setLotDrafts] = useState(() => lotDraftsFromCommitments(lotCommitments))
   const [uploadingLotLetter, setUploadingLotLetter] = useState(null)
   const [message, setMessage] = useState('')
@@ -148,6 +161,10 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
   const [previewUrl, setPreviewUrl] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState('')
+  const [previewPdf, setPreviewPdf] = useState(null)
+  const [previewPdfPageImage, setPreviewPdfPageImage] = useState('')
+  const [previewPdfPageNumber, setPreviewPdfPageNumber] = useState(1)
+  const [previewPdfPageRendering, setPreviewPdfPageRendering] = useState(false)
   const [pendingDeleteKey, setPendingDeleteKey] = useState(null)
   const [deletingKey, setDeletingKey] = useState(null)
   const [bulkSummary, setBulkSummary] = useState([])
@@ -409,14 +426,40 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
     setPreviewLot(lot)
     setPreviewUrl('')
     setPreviewError('')
+    setPreviewPdf(null)
+    setPreviewPdfPageImage('')
+    setPreviewPdfPageNumber(1)
     setPreviewLoading(true)
     try {
       const url = await onGetDocumentUrl(attachment)
       setPreviewUrl(url)
+      if (!attachment.mimeType?.startsWith('image/')) {
+        const { loadPdfDocument, renderPdfPageToDataUrl } = await import('./lib/pdfPreview')
+        const pdf = await loadPdfDocument(url)
+        setPreviewPdf(pdf)
+        setPreviewPdfPageImage(await renderPdfPageToDataUrl(pdf, 1))
+        setPreviewPdfPageNumber(1)
+      }
     } catch (previewErr) {
       setPreviewError(`The preview could not be loaded: ${previewErr instanceof Error ? previewErr.message : 'Unknown error'}`)
     } finally {
       setPreviewLoading(false)
+    }
+  }
+
+  const changePreviewPdfPage = async (delta) => {
+    if (!previewPdf) return
+    const nextPage = previewPdfPageNumber + delta
+    if (nextPage < 1 || nextPage > previewPdf.numPages) return
+    setPreviewPdfPageRendering(true)
+    try {
+      const { renderPdfPageToDataUrl } = await import('./lib/pdfPreview')
+      setPreviewPdfPageImage(await renderPdfPageToDataUrl(previewPdf, nextPage))
+      setPreviewPdfPageNumber(nextPage)
+    } catch (previewErr) {
+      setPreviewError(`The page could not be loaded: ${previewErr instanceof Error ? previewErr.message : 'Unknown error'}`)
+    } finally {
+      setPreviewPdfPageRendering(false)
     }
   }
 
@@ -426,6 +469,9 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
     setPreviewUrl('')
     setPreviewError('')
     setPreviewLoading(false)
+    setPreviewPdf(null)
+    setPreviewPdfPageImage('')
+    setPreviewPdfPageNumber(1)
   }
 
   const deleteLotDocument = async (lot, attachment) => {
@@ -657,6 +703,10 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
         {allLotKeys.map((lot) => {
           const draft = lotDrafts[lot]
           const isSubdivision = lot === subdivisionKey
+          // Development costs (site work, permits, etc.) aren't tracked per lot — they're project-wide.
+          // Until spending is actually itemized per lot, split the total evenly across all 4 lots so
+          // each carries an equal share of what's been spent developing the subdivision so far.
+          const sharedLotCost = sharedDevelopmentCostTotal / commitmentLotKeys.length
           const hasLoan = loanLotKeys.includes(lot)
           const commitmentAmount = Number(draft.commitmentAmount) || 0
           const drawn = lotDrawnTotals[lot] || 0
@@ -684,6 +734,7 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
                 <span>{draft.permitNumber ? `Permit ${draft.permitNumber}` : 'No permit number yet'}</span>
                 <span>{documentCount} document{documentCount === 1 ? '' : 's'}</span>
                 {!isSubdivision ? <span>Spent {currency.format(spent)}</span> : null}
+                {!isSubdivision ? <span>Dev cost (shared) {currency.format(sharedLotCost)}</span> : null}
               </span>
               <span className="lot-commitment-toggle-icon" aria-hidden="true">{isExpanded ? '▾' : '▸'}</span>
             </button>
@@ -747,6 +798,7 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
                 {hasLoan ? <span>Drawn so far: {currency.format(drawn)}</span> : null}
                 {hasLoan ? <span>Left: {currency.format(remaining)}</span> : null}
                 {!isSubdivision ? <span>Spent (checks tagged to {lot}): {currency.format(spent)}</span> : null}
+                {!isSubdivision ? <span>Development cost (shared 1/{commitmentLotKeys.length}): {currency.format(sharedLotCost)}</span> : null}
               </div>
               {showSaveButton ? (
                 <div className="button-row">
@@ -788,13 +840,20 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
           {!previewLoading && previewUrl ? (
             previewDocument.mimeType?.startsWith('image/')
               ? <img className="document-preview-media" src={previewUrl} alt={previewDocument.label || previewDocument.name} />
-              : <>
-                <iframe className="document-preview-media" src={previewUrl} title={previewDocument.label || previewDocument.name} />
-                <small>Some browsers block inline PDF preview for security reasons. If the box above is empty, use "Open in new tab" below — it opens the same PDF using your browser's own viewer.</small>
-              </>
+              : previewPdfPageImage ? (
+                <>
+                  <img className="document-preview-media" src={previewPdfPageImage} alt={`${previewDocument.label || previewDocument.name} — page ${previewPdfPageNumber}`} />
+                  {previewPdf && previewPdf.numPages > 1 ? (
+                    <div className="document-preview-pager">
+                      <button type="button" className="secondary-button" disabled={previewPdfPageRendering || previewPdfPageNumber <= 1} onClick={() => changePreviewPdfPage(-1)}>◂ Prev</button>
+                      <span>Page {previewPdfPageNumber} of {previewPdf.numPages}</span>
+                      <button type="button" className="secondary-button" disabled={previewPdfPageRendering || previewPdfPageNumber >= previewPdf.numPages} onClick={() => changePreviewPdfPage(1)}>Next ▸</button>
+                    </div>
+                  ) : null}
+                </>
+              ) : <small>This document couldn't be rendered for preview — use Download below.</small>
           ) : null}
           {previewUrl ? <div className="button-row">
-            {!previewDocument.mimeType?.startsWith('image/') ? <a className="secondary-button" href={previewUrl} target="_blank" rel="noopener noreferrer">Open in new tab</a> : null}
             <a className="secondary-button" href={previewUrl} download={previewDocument.name}>Download</a>
           </div> : null}
         </div>

@@ -2,10 +2,16 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { describe, expect, it, vi } from 'vitest'
 import LotCommitments from './LotCommitments'
 import { classifyLotDocument, extractLotCommitmentFromDocument } from './lib/gemini'
+import { loadPdfDocument, renderPdfPageToDataUrl } from './lib/pdfPreview'
 
 vi.mock('./lib/gemini', () => ({
   extractLotCommitmentFromDocument: vi.fn().mockResolvedValue({ lot: null, address: '', commitmentAmount: null, notes: '' }),
   classifyLotDocument: vi.fn().mockResolvedValue({ lot: null, documentType: 'Other', address: '', commitmentAmount: null, notes: '' }),
+}))
+
+vi.mock('./lib/pdfPreview', () => ({
+  loadPdfDocument: vi.fn().mockResolvedValue({ numPages: 1 }),
+  renderPdfPageToDataUrl: vi.fn().mockResolvedValue('data:image/png;base64,mockpage'),
 }))
 
 describe('LotCommitments', () => {
@@ -118,6 +124,23 @@ describe('LotCommitments', () => {
     expect(within(lot1Card).getByText('Spent (checks tagged to Lot 1): $4,200.00')).toBeInTheDocument()
   })
 
+  it('splits the project-wide development cost total evenly across all 4 lots', () => {
+    render(<LotCommitments activeProjectId={7} onSaveLotCommitment={() => {}} sharedDevelopmentCostTotal={40000} />)
+
+    fireEvent.click(screen.getByLabelText('Lot 1 details'))
+    const lot1Card = screen.getByLabelText('Lot 1 address').closest('.lot-commitment-card')
+    expect(within(lot1Card).getByText('Dev cost (shared) $10,000.00')).toBeInTheDocument()
+    expect(within(lot1Card).getByText('Development cost (shared 1/4): $10,000.00')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByLabelText('Lot 3 details'))
+    const lot3Card = screen.getByLabelText('Lot 3 address').closest('.lot-commitment-card')
+    expect(within(lot3Card).getByText('Dev cost (shared) $10,000.00')).toBeInTheDocument()
+
+    // The Subdivision card isn't itself a lot, so it doesn't carry a share of the split.
+    const subdivisionCard = screen.getByLabelText('Subdivision details').closest('.lot-commitment-card-parent')
+    expect(within(subdivisionCard).queryByText(/Dev cost \(shared\)/)).not.toBeInTheDocument()
+  })
+
   it('adds a labeled document like a plot plan to a lot, including Lot 1 which has no loan', async () => {
     const onUploadDocument = vi.fn().mockResolvedValue({
       documentId: 'doc-1',
@@ -190,11 +213,11 @@ describe('LotCommitments', () => {
 
     await waitFor(() => expect(onGetDocumentUrl).toHaveBeenCalledWith(lotCommitments[0].attachments[0]))
     const dialog = await screen.findByRole('dialog', { name: 'Preview of Plot Plan' })
-    expect(within(dialog).getByTitle('Plot Plan')).toHaveAttribute('src', 'https://example.com/signed/plot-plan.pdf')
+    await waitFor(() => expect(loadPdfDocument).toHaveBeenCalledWith('https://example.com/signed/plot-plan.pdf'))
+    expect(renderPdfPageToDataUrl).toHaveBeenCalledWith({ numPages: 1 }, 1)
+    expect(within(dialog).getByAltText('Plot Plan — page 1')).toHaveAttribute('src', 'data:image/png;base64,mockpage')
     expect(within(dialog).getByRole('link', { name: 'Download' })).toHaveAttribute('href', 'https://example.com/signed/plot-plan.pdf')
-    const openLink = within(dialog).getByRole('link', { name: 'Open in new tab' })
-    expect(openLink).toHaveAttribute('href', 'https://example.com/signed/plot-plan.pdf')
-    expect(openLink).toHaveAttribute('target', '_blank')
+    expect(within(dialog).queryByRole('link', { name: 'Open in new tab' })).not.toBeInTheDocument()
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
@@ -493,13 +516,31 @@ describe('LotCommitments', () => {
 
     await waitFor(() => expect(onSaveLotCommitment).toHaveBeenLastCalledWith(expect.objectContaining({
       attachments: [
-        expect.objectContaining({ label: 'Contract – BuyerOne' }),
-        expect.objectContaining({ label: 'Contract – BuyerTwo' }),
+        expect.objectContaining({ label: 'Contract – Buyer One' }),
+        expect.objectContaining({ label: 'Contract – Buyer Two' }),
       ],
     })))
     fireEvent.click(screen.getByLabelText('Lot 2 details'))
-    expect(screen.getByText('Contract – BuyerOne')).toBeInTheDocument()
-    expect(screen.getByText('Contract – BuyerTwo')).toBeInTheDocument()
+    expect(screen.getByText('Contract – Buyer One')).toBeInTheDocument()
+    expect(screen.getByText('Contract – Buyer Two')).toBeInTheDocument()
+  })
+
+  it('splits a smashed-together filename into words and fixes the common "Aggreement" typo', async () => {
+    const onUploadDocument = vi.fn().mockResolvedValue({
+      documentId: 'contract-3', storageBucket: 'accounting-documents', storagePath: '7/MuhemmetUyarAggreeement.pdf', name: 'MuhemmetUyarAggreeement.pdf', mimeType: 'application/pdf', size: 100,
+    })
+    classifyLotDocument.mockResolvedValueOnce({ lot: 'Lot 3', documentType: 'Contract', address: '', commitmentAmount: null, notes: '' })
+    const onSaveLotCommitment = vi.fn().mockImplementation((payload) => Promise.resolve({ id: 1, ...payload }))
+
+    render(<LotCommitments activeProjectId={7} onSaveLotCommitment={onSaveLotCommitment} onUploadDocument={onUploadDocument} />)
+
+    fireEvent.change(screen.getByLabelText('Bulk upload documents'), { target: { files: [new File(['a'], 'MuhemmetUyarAggreeement.pdf', { type: 'application/pdf' })] } })
+
+    await waitFor(() => expect(onSaveLotCommitment).toHaveBeenCalledWith(expect.objectContaining({
+      attachments: [expect.objectContaining({ label: 'Contract – Muhemmet Uyar Agreement' })],
+    })))
+    fireEvent.click(screen.getByLabelText('Lot 3 details'))
+    expect(screen.getByText('Contract – Muhemmet Uyar Agreement')).toBeInTheDocument()
   })
 
   it('sorts multiple bulk-uploaded documents to their classified lots and saves each one', async () => {

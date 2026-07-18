@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import CheckPrinting from './CheckPrinting'
 import { amountToCheckWords } from './lib/checks'
+
+afterEach(() => window.localStorage.clear())
 
 const savedCheck = {
   id: 1,
@@ -96,10 +98,10 @@ describe('CheckPrinting', () => {
     render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} />)
 
     expect(screen.getByLabelText('Check template')).toHaveValue('bofa')
-    expect(screen.getByLabelText('Printer feed preset')).toHaveValue('direct')
+    expect(screen.getByLabelText('Printer feed preset')).toHaveValue('letter_voucher')
     expect(screen.getByLabelText('Horizontal check print adjustment')).toHaveValue(0)
-    expect(screen.getByText(/pads the check to 6 × 3 in/)).toBeInTheDocument()
-    expect(screen.getByText(/Horizontal feed: 6-inch side across the tray/)).toBeInTheDocument()
+    expect(screen.getByText(/centered horizontally with a small 0.25 in top margin/)).toBeInTheDocument()
+    expect(screen.getByText(/prints as a tall 2.7 × 6 in panel/)).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Bank of America · 6 × 2.7' })).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Check template'), { target: { value: 'providence' } })
 
@@ -108,6 +110,104 @@ describe('CheckPrinting', () => {
     expect(screen.getByRole('heading', { name: 'Providence Bank · 6 × 2.7' })).toBeInTheDocument()
     expect(screen.getByLabelText('Live check preview')).toHaveClass('providence')
     expect(screen.getByLabelText('Live check preview')).toHaveTextContent('Providence Bank')
+  })
+
+  it('moves a field on the live preview immediately when its inch offset changes', () => {
+    render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Move individual fields (inches)' }))
+
+    const preview = screen.getByLabelText('Live check preview')
+    const payee = preview.querySelector('.preview-payee')
+    expect(payee).toHaveStyle({ left: '19.333%' })
+
+    fireEvent.change(screen.getByLabelText('Payee horizontal adjustment'), { target: { value: '0.6' } })
+    expect(payee).toHaveStyle({ left: '29.333%' })
+
+    const memo = preview.querySelector('.preview-memo')
+    fireEvent.change(screen.getByLabelText('Memo vertical adjustment'), { target: { value: '0.27' } })
+    expect(memo).toHaveStyle({ top: '86.297%' })
+
+    const amountField = preview.querySelector('.preview-amount')
+    fireEvent.change(screen.getByLabelText('Amount horizontal adjustment'), { target: { value: '0.6' } })
+    expect(amountField).toHaveStyle({ right: `${13.334 - (0.6 / 6) * 100}%` })
+  })
+
+  it('applies per-field offsets to the printed check on top of its calibrated position', async () => {
+    window.print = vi.fn()
+    render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Move individual fields (inches)' }))
+
+    fireEvent.change(screen.getByLabelText('Date horizontal adjustment'), { target: { value: '0.2' } })
+    fireEvent.change(screen.getByLabelText('Date vertical adjustment'), { target: { value: '-0.1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Print Letter voucher mock alignment check' }))
+
+    await waitFor(() => expect(window.print).toHaveBeenCalled())
+    const mock = screen.getByLabelText('Printable check TEST')
+    const datePrefix = mock.querySelector('.print-check-date-prefix:not(.print-check-coord-label)')
+    expect(datePrefix).toHaveStyle({ top: '0.5in', left: '3.39in' })
+    const dateYear = mock.querySelector('.print-check-date-year:not(.print-check-coord-label)')
+    expect(dateYear).toHaveStyle({ top: '0.5in', left: `${4.44 + 0.2}in` })
+    expect(mock).toHaveTextContent('top 0.50in · left 3.39in')
+  })
+
+  it('keeps the field-offset panel collapsed by default and expands it on click', () => {
+    render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} />)
+
+    expect(screen.queryByLabelText('Payee horizontal adjustment')).not.toBeInTheDocument()
+    const toggle = screen.getByRole('button', { name: 'Move individual fields (inches)' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByLabelText('Payee horizontal adjustment')).toBeInTheDocument()
+
+    fireEvent.click(toggle)
+    expect(screen.queryByLabelText('Payee horizontal adjustment')).not.toBeInTheDocument()
+  })
+
+  it('saves a custom field position and reloads it as the default next time', () => {
+    const { unmount } = render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Move individual fields (inches)' }))
+
+    fireEvent.change(screen.getByLabelText('Memo horizontal adjustment'), { target: { value: '0.15' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save field positions' }))
+    expect(screen.getByRole('status')).toHaveTextContent('Saved — these positions will load automatically next time')
+    unmount()
+
+    render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Move individual fields (inches)' }))
+    expect(screen.getByLabelText('Memo horizontal adjustment')).toHaveValue(0.15)
+  })
+
+  it('keeps field offsets independent per bank, since the two templates don\'t line up identically', async () => {
+    window.print = vi.fn()
+    render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Move individual fields (inches)' }))
+
+    // Bank of America starts at 0 — nothing confirmed wrong with it yet.
+    expect(screen.getByLabelText('Amount horizontal adjustment')).toHaveValue(0)
+    expect(screen.getByText('Editing: Bank of America')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Check template'), { target: { value: 'providence' } })
+    // Providence has a confirmed correction baked in as its default.
+    expect(screen.getByText('Editing: Providence Bank')).toBeInTheDocument()
+    expect(screen.getByLabelText('Amount horizontal adjustment')).toHaveValue(0.06)
+    expect(screen.getByLabelText('Amount vertical adjustment')).toHaveValue(-0.01)
+
+    fireEvent.change(screen.getByLabelText('Amount horizontal adjustment'), { target: { value: '0.1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Print Letter voucher mock alignment check' }))
+    await waitFor(() => expect(window.print).toHaveBeenCalled())
+    const providenceMock = screen.getByLabelText('Printable check TEST')
+    expect(providenceMock).toHaveTextContent('top 1.11in · left 4.43in')
+
+    // Switching back to Bank of America shows its own (still-zero) values, unaffected by the
+    // Providence edit above.
+    fireEvent.change(screen.getByLabelText('Check template'), { target: { value: 'bofa' } })
+    expect(screen.getByLabelText('Amount horizontal adjustment')).toHaveValue(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Print Letter voucher mock alignment check' }))
+    await waitFor(() => expect(window.print).toHaveBeenCalledTimes(2))
+    const bofaMock = screen.getByLabelText('Printable check TEST')
+    expect(bofaMock).toHaveTextContent('top 1.04in · left 4.26in')
   })
 
   it('prints four full-size BOFA and Flagstar calibration templates on Letter paper', async () => {
@@ -135,6 +235,7 @@ describe('CheckPrinting', () => {
     const onUpdateStatus = vi.fn()
     render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} onSaveCheck={onSaveCheck} onUpdateStatus={onUpdateStatus} />)
 
+    fireEvent.change(screen.getByLabelText('Printer feed preset'), { target: { value: 'direct' } })
     fireEvent.click(screen.getByRole('button', { name: 'Print 6 × 3 mock alignment check' }))
 
     await waitFor(() => expect(window.print).toHaveBeenCalled())
@@ -147,6 +248,68 @@ describe('CheckPrinting', () => {
     expect(mock).toHaveTextContent('Alignment test')
     expect(onSaveCheck).not.toHaveBeenCalled()
     expect(onUpdateStatus).not.toHaveBeenCalled()
+  })
+
+  it('prints direct onto Letter-size voucher check stock at the calibrated position by default', async () => {
+    window.print = vi.fn()
+    render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print Letter voucher mock alignment check' }))
+
+    await waitFor(() => expect(window.print).toHaveBeenCalled())
+    const mock = screen.getByLabelText('Printable check TEST')
+    expect(mock).toHaveClass('print-page-letter_voucher')
+    expect(mock.querySelector('style')).toHaveTextContent('size: 8.5in 11in')
+    expect(mock).toHaveStyle({ '--check-offset-x': '0in', '--check-offset-y': '0in' })
+    expect(mock).toHaveTextContent('Alignment Test Payee')
+    expect(screen.getByLabelText('Check outline for alignment reference')).toBeInTheDocument()
+  })
+
+  it('carries move right/left and move down/up nudges through as pure offsets for the Letter voucher preset', async () => {
+    window.print = vi.fn()
+    render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} />)
+
+    fireEvent.change(screen.getByLabelText('Horizontal check print adjustment'), { target: { value: '0.1' } })
+    fireEvent.change(screen.getByLabelText('Vertical check print adjustment'), { target: { value: '-0.05' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Print Letter voucher mock alignment check' }))
+
+    await waitFor(() => expect(window.print).toHaveBeenCalled())
+    const mock = screen.getByLabelText('Printable check TEST')
+    expect(mock).toHaveStyle({ '--check-offset-x': '0.1in', '--check-offset-y': '-0.05in' })
+  })
+
+  it('does not draw the mock outline box on a real saved check print', async () => {
+    window.print = vi.fn()
+    const onUpdateStatus = vi.fn().mockImplementation(async (_id, status) => ({ ...savedCheck, status }))
+    render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} checks={[savedCheck]} onUpdateStatus={onUpdateStatus} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'View check' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }))
+
+    await waitFor(() => expect(window.print).toHaveBeenCalled())
+    expect(screen.queryByLabelText('Check outline for alignment reference')).not.toBeInTheDocument()
+  })
+
+  it('prints each field\'s coordinates on a mock alignment check, but never on a real saved check', async () => {
+    window.print = vi.fn()
+    const { rerender } = render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} onUpdateStatus={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Print Letter voucher mock alignment check' }))
+    await waitFor(() => expect(window.print).toHaveBeenCalled())
+    const mock = screen.getByLabelText('Printable check TEST')
+    expect(mock).toHaveTextContent('top 1.04in · left 1.05in')
+    expect(mock).toHaveTextContent('top 0.60in · left 3.19in')
+    expect(mock).toHaveTextContent('top 2.15in · left 0.48in')
+
+    window.print.mockClear()
+    const onUpdateStatus = vi.fn().mockImplementation(async (_id, status) => ({ ...savedCheck, status }))
+    rerender(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} checks={[savedCheck]} onUpdateStatus={onUpdateStatus} />)
+    fireEvent.click(screen.getByRole('button', { name: 'View check' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(window.print).toHaveBeenCalled())
+    const real = screen.getByLabelText('Printable check 1042')
+    expect(real).not.toHaveTextContent('top 1.04in · left 1.05in')
+    expect(real.querySelector('.print-check-coord-label')).not.toBeInTheDocument()
   })
 
   it('honors the selected printer preset when printing the mock alignment check', async () => {
@@ -208,6 +371,7 @@ describe('CheckPrinting', () => {
     const onUpdateStatus = vi.fn().mockImplementation(async (_id, status) => ({ ...savedCheck, status }))
     render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} checks={[savedCheck]} onUpdateStatus={onUpdateStatus} />)
 
+    fireEvent.change(screen.getByLabelText('Printer feed preset'), { target: { value: 'direct' } })
     fireEvent.click(screen.getByRole('button', { name: 'View check' }))
     expect(screen.getByLabelText('Saved check preview 1042')).toHaveTextContent('Foundation materials')
     fireEvent.click(screen.getByRole('button', { name: 'Print' }))

@@ -45,4 +45,33 @@ describe('SpendingByJob', () => {
 
     expect(screen.getByText('No construction draft jobs recorded yet.')).toBeInTheDocument()
   })
+
+  it('drives the "Lot Cost" job row from the project\'s total development cost, split evenly per lot, instead of matched checks', () => {
+    const constructionDrafts = [
+      { id: 'draft-lot-cost', name: 'Lot Cost', sourceEstimates: {}, convertedCostId: null },
+      {
+        id: 'draft-framing',
+        name: 'Framing Materials',
+        sourceEstimates: { lot_2: 80000 },
+        convertedCostId: 'cost-framing',
+      },
+    ]
+    const activeCosts = [{ costId: 'cost-framing', name: 'Framing Materials', amount: 80000 }]
+    const checks = [{ id: 1, costId: 'cost-framing', lot: 'Lot 2', amount: 40000, status: 'printed' }]
+
+    render(<SpendingByJob constructionDrafts={constructionDrafts} checks={checks} activeCosts={activeCosts} sharedDevelopmentCostTotal={40000} />)
+
+    const lotCostRow = screen.getByText('Lot Cost').closest('tr')
+    const lotCostCells = within(lotCostRow).getAllByRole('cell')
+    // cells[0] job name, cells[1..4] Lot 1..4, cells[5] total — each lot gets an equal $10,000 share.
+    expect(within(lotCostCells[1]).getByText('$10,000')).toBeInTheDocument()
+    expect(within(lotCostCells[1]).getByText('of $10,000')).toBeInTheDocument()
+    expect(within(lotCostCells[4]).getByText('$10,000')).toBeInTheDocument()
+    expect(within(lotCostCells[5]).getByText('$40,000')).toBeInTheDocument()
+    expect(lotCostRow).toHaveClass('spending-by-job-shared-row')
+
+    // The grand total in the header/footer naturally includes it, since it's just another row:
+    // $40,000 (Lot Cost) + $40,000 (Framing spent) of $40,000 (Lot Cost) + $80,000 (Framing estimated).
+    expect(screen.getByText('$80,000 of $120,000')).toBeInTheDocument()
+  })
 })

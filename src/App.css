@@ -386,6 +386,96 @@ button:disabled {
   font: inherit;
 }
 
+.check-field-offset-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.check-field-offset-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.check-field-offset-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.check-field-offset-toggle strong {
+  font-size: 0.82rem;
+  color: #1d4ed8;
+}
+
+.check-field-offset-bank {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1e3a8a;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.check-field-offset-toggle-icon {
+  color: #1d4ed8;
+}
+
+.check-field-offset-controls > span {
+  color: #64748b;
+  font-size: 0.76rem;
+}
+
+.check-field-offset-saved {
+  color: #15803d;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.check-field-offset-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.check-field-offset-row > span {
+  color: #334155;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.check-field-offset-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.check-field-offset-row input {
+  width: 100%;
+  border: 1px solid #93c5fd;
+  border-radius: 8px;
+  padding: 5px 7px;
+  background: white;
+  font: inherit;
+}
+
 .check-words-preview {
   display: flex;
   flex-direction: column;
@@ -650,22 +740,17 @@ p.check-link-summary {
 }
 
 .preview-dollar {
-  position: absolute;
-  top: 35%;
-  left: 75%;
-  color: #334155;
-  font-family: Arial, Helvetica, sans-serif;
-  font-size: 1.7em;
-  font-weight: 700;
+  margin-right: 2px;
+  font-size: 1.15em;
 }
 
 .preview-amount {
   position: absolute;
   top: 38%;
   right: 6%;
-  width: 16%;
+  width: 26%;
   padding-bottom: 1px;
-  overflow: hidden;
+  overflow: visible;
   border-bottom: 1px solid #64748b;
   text-align: right;
   white-space: nowrap;
@@ -983,6 +1068,11 @@ p.check-link-summary {
   background: #f8fafc;
 }
 
+.spending-by-job-shared-row td {
+  color: #92400e;
+  background: #fffbeb;
+}
+
 .spending-by-job-unassigned {
   color: #b45309 !important;
 }
@@ -1272,8 +1362,13 @@ p.check-link-summary {
   background: #f8fafc;
 }
 
-iframe.document-preview-media {
-  height: 70vh;
+.document-preview-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-size: 0.82rem;
+  color: #475569;
 }
 
 .lot-commitment-totals {
@@ -2583,6 +2678,43 @@ iframe.document-preview-media {
     height: 11in;
   }
 
+  .print-check-sheet.print-page-letter_voucher {
+    width: 8.5in;
+    height: 11in;
+  }
+
+  /* Tall/narrow check (2.7 x 6in), centered horizontally with a small top margin, built by
+     rotating a normal 6 x 2.7in check face 90deg around its own center — the same technique
+     print-page-direct_rotated uses, just placed on a full Letter page instead of custom paper.
+     --check-offset-x/y here are pure user nudges (page-relative), added before rotation so
+     "move right/down" stays intuitive regardless of the internal rotation. */
+  .print-check-sheet.print-page-letter_voucher .print-check-fields {
+    position: absolute;
+    top: calc(3.25in + var(--check-offset-y, 0in));
+    left: calc(50% + var(--check-offset-x, 0in));
+    width: 6in;
+    height: 2.7in;
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+
+  .print-check-sheet.print-page-letter_voucher .print-check-field {
+    transform: none;
+  }
+
+  .print-check-sheet.print-page-letter_voucher .print-check-coord-label {
+    transform: translate(0, 0.17in);
+  }
+
+  .print-check-mock-outline {
+    position: absolute;
+    inset: 0;
+    box-sizing: border-box;
+    border: 1px dashed #c00;
+    color: #c00;
+    font-size: 7pt;
+    padding: 2px 4px;
+  }
+
   .print-check-sheet.print-page-direct {
     height: 3in;
   }
@@ -2611,6 +2743,14 @@ iframe.document-preview-media {
     line-height: 0.18in;
     transform: translate(var(--check-offset-x, 0in), var(--check-offset-y, 0in));
     white-space: nowrap;
+  }
+
+  .print-check-coord-label {
+    overflow: visible;
+    color: #c00;
+    font-size: 6pt;
+    font-weight: 400;
+    transform: translate(var(--check-offset-x, 0in), calc(var(--check-offset-y, 0in) + 0.17in));
   }
 
   .print-check-date-prefix {

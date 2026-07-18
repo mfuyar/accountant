@@ -1558,12 +1558,14 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
         onUploadDocument={handleUploadCostDocument}
         onOpenDocument={handleOpenCostDocument}
         onGetDocumentUrl={createDocumentSignedUrl}
+        sharedDevelopmentCostTotal={ownerCostTotal}
       /> : null}
 
       {showProjectSection('jobs') ? <SpendingByJob
         constructionDrafts={constructionDrafts}
         checks={projectChecks.filter((check) => String(check.projectId) === String(activeProjectId))}
         activeCosts={activeCostRecords}
+        sharedDevelopmentCostTotal={ownerCostTotal}
       /> : null}
 
       {showProjectSection('income') ? <IncomeSection
