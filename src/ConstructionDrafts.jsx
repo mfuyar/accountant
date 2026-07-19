@@ -22,7 +22,9 @@ const estimateLots = [
   ['lot_4', 'Lot #4'],
 ]
 
-function ConstructionDrafts({ drafts = [], onSaveDraft, onUseDraft, onUploadDocument, onOpenDocument }) {
+const SHARED_DEVELOPMENT_COST_DRAFT_NAME = 'Lot Cost'
+
+function ConstructionDrafts({ drafts = [], onSaveDraft, onUseDraft, onUploadDocument, onOpenDocument, sharedDevelopmentCostTotal = 0 }) {
   const [expanded, setExpanded] = useState(false)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('draft')
@@ -173,30 +175,32 @@ function ConstructionDrafts({ drafts = [], onSaveDraft, onUseDraft, onUploadDocu
         <div className="construction-draft-grid">
           {visibleDrafts.map((draft) => {
             const isEditing = editingId === draft.id
+            const isSharedDraft = draft.name === SHARED_DEVELOPMENT_COST_DRAFT_NAME
+            const sharedLotShare = sharedDevelopmentCostTotal / estimateLots.length
             return <article key={draft.id} className={`construction-draft-card${draft.status === 'converted' ? ' converted' : ''}${isEditing ? ' editing' : ''}`}>
               <div className="construction-draft-card-header">
                 <div>
                   <strong>{draft.name}</strong>
-                  <p>{draft.status === 'converted' ? 'Added to project costs' : 'Waiting for amount and timing'}</p>
+                  <p>{isSharedDraft ? 'Shared across all lots — auto-calculated, no action needed' : (draft.status === 'converted' ? 'Added to project costs' : 'Waiting for amount and timing')}</p>
                 </div>
-                <span className={`draft-status ${draft.status}`}>{draft.status === 'converted' ? 'Added' : 'Draft'}</span>
+                <span className={`draft-status ${draft.status}`}>{isSharedDraft ? 'Auto' : (draft.status === 'converted' ? 'Added' : 'Draft')}</span>
               </div>
               <div className="construction-draft-meta">
-                <span>{draft.plannedAmount == null ? 'Amount not set' : currency.format(draft.plannedAmount)}</span>
-                <span>{draft.plannedDate || 'Date not set'}</span>
+                <span>{isSharedDraft ? currency.format(sharedDevelopmentCostTotal) : (draft.plannedAmount == null ? 'Amount not set' : currency.format(draft.plannedAmount))}</span>
+                <span>{isSharedDraft ? 'Updates as costs are added' : (draft.plannedDate || 'Date not set')}</span>
                 <span>{draft.attachments?.length || 0} file{draft.attachments?.length === 1 ? '' : 's'}</span>
               </div>
               <div className="construction-source-estimates" aria-label={`Expected costs for ${draft.name}`}>
                 <span>Sheet estimates</span>
                 {estimateLots.map(([key, label]) => <div key={key}>
                   <small>{label}</small>
-                  <strong>{draft.sourceEstimates?.[key] == null ? 'Not provided' : currency.format(Number(draft.sourceEstimates[key]))}</strong>
+                  <strong>{isSharedDraft ? currency.format(sharedLotShare) : (draft.sourceEstimates?.[key] == null ? 'Not provided' : currency.format(Number(draft.sourceEstimates[key])))}</strong>
                 </div>)}
               </div>
               {draft.details ? <p className="construction-draft-details">{draft.details}</p> : null}
               <div className="button-row">
                 <button type="button" className="secondary-button" onClick={() => isEditing ? setEditingId(null) : startEditing(draft)}>{isEditing ? 'Close details' : 'Details & files'}</button>
-                {draft.status === 'draft' ? <button type="button" className="action-button" onClick={() => onUseDraft?.(draft)}>Use as construction cost</button> : null}
+                {!isSharedDraft && draft.status === 'draft' ? <button type="button" className="action-button" onClick={() => onUseDraft?.(draft)}>Use as construction cost</button> : null}
               </div>
 
               {isEditing ? <div className="construction-draft-editor">
@@ -204,16 +208,20 @@ function ConstructionDrafts({ drafts = [], onSaveDraft, onUseDraft, onUploadDocu
                   Details and scope
                   <textarea aria-label={`Details for ${draft.name}`} rows="3" value={draftForm.details} onChange={(event) => setDraftForm((current) => ({ ...current, details: event.target.value }))} />
                 </label>
-                <div className="construction-draft-fields">
-                  <label>
-                    Planned amount (optional)
-                    <input aria-label={`Planned amount for ${draft.name}`} type="number" min="0" step="0.01" value={draftForm.plannedAmount} onChange={(event) => setDraftForm((current) => ({ ...current, plannedAmount: event.target.value }))} />
-                  </label>
-                  <label>
-                    Planned date (optional)
-                    <input aria-label={`Planned date for ${draft.name}`} type="date" value={draftForm.plannedDate} onChange={(event) => setDraftForm((current) => ({ ...current, plannedDate: event.target.value }))} />
-                  </label>
-                </div>
+                {isSharedDraft ? (
+                  <p className="construction-draft-details">Amount and date are calculated automatically from total development costs and can't be edited here.</p>
+                ) : (
+                  <div className="construction-draft-fields">
+                    <label>
+                      Planned amount (optional)
+                      <input aria-label={`Planned amount for ${draft.name}`} type="number" min="0" step="0.01" value={draftForm.plannedAmount} onChange={(event) => setDraftForm((current) => ({ ...current, plannedAmount: event.target.value }))} />
+                    </label>
+                    <label>
+                      Planned date (optional)
+                      <input aria-label={`Planned date for ${draft.name}`} type="date" value={draftForm.plannedDate} onChange={(event) => setDraftForm((current) => ({ ...current, plannedDate: event.target.value }))} />
+                    </label>
+                  </div>
+                )}
                 <div className="draft-document-drop" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
                   event.preventDefault()
                   attachDocument(draft, Array.from(event.dataTransfer.files || [])[0])

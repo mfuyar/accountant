@@ -77,4 +77,36 @@ describe('ConstructionDrafts', () => {
     expect(estimates).toHaveTextContent('Lot #1Not provided')
     expect(estimates).toHaveTextContent('Lot #4Not provided')
   })
+
+  it('shows the live shared development cost split for the "Lot Cost" draft instead of "Not provided", and hides its convert button', () => {
+    const lotCostDraft = {
+      id: 'draft-lot-cost',
+      name: 'Lot Cost',
+      details: '',
+      plannedAmount: null,
+      plannedDate: null,
+      attachments: [],
+      status: 'draft',
+      convertedCostId: null,
+      sourceEstimates: {},
+    }
+    const onUseDraft = vi.fn()
+    render(<ConstructionDrafts drafts={[lotCostDraft]} onUseDraft={onUseDraft} sharedDevelopmentCostTotal={40000} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show construction drafts (1)' }))
+    expect(screen.getByText('Shared across all lots — auto-calculated, no action needed')).toBeInTheDocument()
+
+    const estimates = screen.getByLabelText('Expected costs for Lot Cost')
+    expect(estimates).toHaveTextContent('Lot #3$10,000')
+    expect(estimates).toHaveTextContent('Lot #2$10,000')
+    expect(estimates).toHaveTextContent('Lot #1$10,000')
+    expect(estimates).toHaveTextContent('Lot #4$10,000')
+    expect(screen.queryByRole('button', { name: 'Use as construction cost' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Details & files' }))
+    expect(screen.getByText("Amount and date are calculated automatically from total development costs and can't be edited here.")).toBeInTheDocument()
+    expect(screen.queryByLabelText('Planned amount for Lot Cost')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Planned date for Lot Cost')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Details for Lot Cost')).toBeInTheDocument()
+  })
 })

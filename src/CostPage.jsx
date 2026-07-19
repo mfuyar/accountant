@@ -24,7 +24,7 @@ const validateCostDocument = (file) => {
   return ''
 }
 
-function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions, constructionDrafts = [], projectChecks = [], initialParentCostId = null, onBack, onAddDevelopmentCost, onEditDevelopmentCost, onDeleteDevelopmentCost, onUploadDocument, onAttachDocument, onOpenDocument, onMergeBreakdowns, onAddItemsToGroup, onUnmergeGroup, onSaveConstructionDraft, onConvertConstructionDraft }) {
+function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions, constructionDrafts = [], projectChecks = [], initialParentCostId = null, onBack, onAddDevelopmentCost, onEditDevelopmentCost, onDeleteDevelopmentCost, onUploadDocument, onAttachDocument, onOpenDocument, onMergeBreakdowns, onAddItemsToGroup, onUnmergeGroup, onSaveConstructionDraft, onConvertConstructionDraft, sharedDevelopmentCostTotal = 0 }) {
   const getDefaultOwnerId = (ownerList) => {
     const normalized = (value) => value?.toLowerCase().replace(/\s+/g, '').trim()
     const greenfortOwner = (ownerList || []).find((owner) => {
@@ -714,6 +714,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
         onUseDraft={handleUseConstructionDraft}
         onUploadDocument={onUploadDocument}
         onOpenDocument={onOpenDocument}
+        sharedDevelopmentCostTotal={sharedDevelopmentCostTotal}
       />
 
       <section ref={costListRef} className="panel cost-list-panel">

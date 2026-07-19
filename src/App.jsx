@@ -1000,6 +1000,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
         onUnmergeGroup={handleUnmergeCostBreakdownGroup}
         onSaveConstructionDraft={handleSaveConstructionDraft}
         onConvertConstructionDraft={handleConvertConstructionDraft}
+        sharedDevelopmentCostTotal={ownerCostTotal}
       />
     )
   }
