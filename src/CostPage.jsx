@@ -745,7 +745,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
               {ownerOptions.map((owner) => <option key={owner.id} value={String(owner.id)}>{owner.name}</option>)}
             </select>
           </label>
-          <label>
+          <label className="cost-list-toolbar-secondary">
             Sort breakdowns
             <select aria-label="Sort breakdowns" value={breakdownSort} onChange={(event) => setBreakdownSort(event.target.value)}>
               <option value="amount_desc">Amount: highest first</option>
@@ -777,12 +777,9 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
             return (
               <Fragment key={cost.id}>
                 <div className={`table-row cost-parent-row${editingCostId === cost.costId ? ' is-being-edited' : ''}`}>
-                  <div>
+                  <div className="cost-row-summary">
                     <strong>{cost.name}</strong>
                     <p>{owner?.name || 'Owner'} • {phaseLabel(cost.phase)} • {cost.date}</p>
-                    <small>Breakdown {currency.format(allocated)} • Unallocated {currency.format(remaining)}</small>
-                    {renderAttachedChecks(cost.costId)}
-                    {renderAttachmentArea(cost)}
                   </div>
                   <div className="cost-row-amount">{currency.format(cost.amount)}</div>
                   <div className="button-row cost-row-actions">
@@ -807,6 +804,11 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                     ) : (
                       <button type="button" className="danger-button" onClick={() => setPendingDeleteCostId(cost.costId)}>Delete cost</button>
                     )}
+                  </div>
+                  <div className="cost-row-details">
+                    <small>Breakdown {currency.format(allocated)} • Unallocated {currency.format(remaining)}</small>
+                    {renderAttachedChecks(cost.costId)}
+                    {renderAttachmentArea(cost)}
                   </div>
                 </div>
                 {breakdownsExpanded ? <div id={`cost-breakdowns-${cost.costId}`} className="cost-breakdown-group">
@@ -840,7 +842,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                     const addItemsExpanded = addingToGroupId === child.costId
                     return <Fragment key={child.id}>
                       <div className={`table-row cost-breakdown-row${editingCostId === child.costId ? ' is-being-edited' : ''}`}>
-                        <div>
+                        <div className="cost-row-summary">
                           {mergedItems.length ? (
                             <strong>↳ {child.name}</strong>
                           ) : (
@@ -856,8 +858,6 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                             </label>
                           )}
                           <p>{mergedItems.length ? 'Merged breakdown total' : `Breakdown of ${cost.name}`} • {phaseLabel(child.phase)} • {child.date}</p>
-                          {renderAttachedChecks(child.costId)}
-                          {renderAttachmentArea(child)}
                         </div>
                         <div className="cost-row-amount">{currency.format(child.amount)}</div>
                         <div className="button-row cost-row-actions">
@@ -900,6 +900,10 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                             <button type="button" className="danger-button" onClick={() => setPendingDeleteCostId(child.costId)}>{mergedItems.length ? 'Delete group' : 'Delete breakdown'}</button>
                           )}
                         </div>
+                        <div className="cost-row-details">
+                          {renderAttachedChecks(child.costId)}
+                          {renderAttachmentArea(child)}
+                        </div>
                       </div>
                       {addItemsExpanded ? <div className="breakdown-group-editor">
                         <strong>Add existing breakdowns to {child.name}</strong>
@@ -933,15 +937,17 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                       {mergedItemsExpanded ? <div className="merged-breakdown-items">
                         {mergedItems.map((item) => (
                           <div key={item.id} className={`table-row cost-breakdown-row merged-breakdown-item-row${editingCostId === item.costId ? ' is-being-edited' : ''}`}>
-                            <div>
+                            <div className="cost-row-summary">
                               <strong>↳↳ {item.name}</strong>
                               <p>Individual item • {phaseLabel(item.phase)} • {item.date}</p>
-                              {renderAttachedChecks(item.costId)}
-                              {renderAttachmentArea(item)}
                             </div>
                             <div className="cost-row-amount">{currency.format(item.amount)}</div>
                             <div className="button-row cost-row-actions">
                               <button type="button" className="action-button" onClick={() => handleStartEdit(item)}>Edit item</button>
+                            </div>
+                            <div className="cost-row-details">
+                              {renderAttachedChecks(item.costId)}
+                              {renderAttachmentArea(item)}
                             </div>
                           </div>
                         ))}

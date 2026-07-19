@@ -1511,9 +1511,18 @@ p.check-link-summary {
 .cost-breakdown-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 120px minmax(360px, 440px);
+  grid-template-areas:
+    "summary amount actions"
+    "details details details";
+  align-items: start;
+}
+
+.cost-row-summary {
+  grid-area: summary;
 }
 
 .cost-row-amount {
+  grid-area: amount;
   justify-self: end;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -1521,8 +1530,20 @@ p.check-link-summary {
 }
 
 .cost-row-actions {
+  grid-area: actions;
   justify-content: flex-end;
   flex-wrap: wrap;
+}
+
+.cost-row-details {
+  grid-area: details;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #cbd5e1;
 }
 
 .cost-list-panel,
@@ -1548,6 +1569,11 @@ p.check-link-summary {
   color: #475569;
   font-size: 0.82rem;
   font-weight: 700;
+}
+
+.cost-list-toolbar-secondary {
+  padding-left: 14px;
+  border-left: 1px solid #dbeafe;
 }
 
 .cost-list-toolbar input,
@@ -2350,14 +2376,19 @@ p.check-link-summary {
   .cost-parent-row,
   .cost-breakdown-row {
     grid-template-columns: minmax(0, 1fr) 130px;
-  }
-
-  .cost-row-actions {
-    grid-column: 1 / -1;
+    grid-template-areas:
+      "summary amount"
+      "actions actions"
+      "details details";
   }
 
   .cost-list-toolbar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cost-list-toolbar-secondary {
+    padding-left: 0;
+    border-left: none;
   }
 
   .overview-summary-grid,
@@ -2387,6 +2418,11 @@ p.check-link-summary {
   .cost-parent-row,
   .cost-breakdown-row {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "summary"
+      "amount"
+      "actions"
+      "details";
   }
 
   .cost-breakdown-row {
@@ -2439,7 +2475,10 @@ p.check-link-summary {
     border-radius: 18px;
   }
 
-  .cost-page-nav,
+  .cost-page-nav {
+    flex-direction: column;
+  }
+
   .cost-list-toolbar {
     grid-template-columns: 1fr;
   }
