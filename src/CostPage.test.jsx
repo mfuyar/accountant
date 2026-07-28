@@ -442,4 +442,82 @@ describe('CostPage invoice extraction', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show breakdowns (1)' }))
     expect(screen.getByText('#1043 · $500 · draft')).toBeInTheDocument()
   })
+
+  it('saves a categorized lot cost', async () => {
+    const onAddDevelopmentCost = vi.fn().mockResolvedValue({ costId: 'utility-cost' })
+    render(<CostPage
+      owners={[{ id: 1, name: 'GreenFort' }]}
+      developmentCosts={[]}
+      costVersions={[]}
+      lotCommitments={[{ lot: 'Lot 2' }, { lot: 'Lot 3' }]}
+      onBack={() => {}}
+      onAddDevelopmentCost={onAddDevelopmentCost}
+      onEditDevelopmentCost={() => {}}
+      onDeleteDevelopmentCost={() => {}}
+    />)
+
+    fireEvent.change(screen.getByLabelText('Cost name'), { target: { value: 'Water connection' } })
+    fireEvent.change(screen.getByLabelText('Cost amount'), { target: { value: '8197.15' } })
+    fireEvent.change(screen.getByLabelText('Cost date'), { target: { value: '2026-07-17' } })
+    fireEvent.change(screen.getByLabelText('Cost phase'), { target: { value: 'construction' } })
+    fireEvent.change(screen.getByLabelText('Cost category'), { target: { value: 'Site utilities' } })
+    fireEvent.change(screen.getByLabelText('Cost lot'), { target: { value: 'Lot 3' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add cost' }))
+
+    await waitFor(() => expect(onAddDevelopmentCost).toHaveBeenCalledWith(expect.objectContaining({
+      category: 'Site utilities',
+      lotAllocations: [{ lot: 'Lot 3', amount: 8197.15 }],
+    })))
+  })
+
+  it('splits a shared cost evenly across individual lots to the cent', async () => {
+    const onAddDevelopmentCost = vi.fn().mockResolvedValue({ costId: 'shared-cost' })
+    render(<CostPage
+      owners={[{ id: 1, name: 'GreenFort' }]}
+      developmentCosts={[]}
+      costVersions={[]}
+      lotCommitments={[{ lot: 'Subdivision' }, { lot: 'Lot 1' }, { lot: 'Lot 2' }, { lot: 'Lot 3' }, { lot: 'Lot 4' }]}
+      onBack={() => {}}
+      onAddDevelopmentCost={onAddDevelopmentCost}
+      onEditDevelopmentCost={() => {}}
+      onDeleteDevelopmentCost={() => {}}
+    />)
+    fireEvent.change(screen.getByLabelText('Cost name'), { target: { value: 'Shared development' } })
+    fireEvent.change(screen.getByLabelText('Cost amount'), { target: { value: '100.03' } })
+    fireEvent.change(screen.getByLabelText('Cost date'), { target: { value: '2026-07-22' } })
+    fireEvent.change(screen.getByLabelText('Cost lot'), { target: { value: 'Shared' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Split evenly across 4 lots' }))
+    expect(screen.getByLabelText('Lot 1 allocation')).toHaveValue(25.01)
+    expect(screen.getByLabelText('Lot 4 allocation')).toHaveValue(25)
+    fireEvent.click(screen.getByRole('button', { name: 'Add cost' }))
+    await waitFor(() => expect(onAddDevelopmentCost).toHaveBeenCalledWith(expect.objectContaining({
+      lotAllocations: [
+        { lot: 'Lot 1', amount: 25.01 }, { lot: 'Lot 2', amount: 25.01 },
+        { lot: 'Lot 3', amount: 25.01 }, { lot: 'Lot 4', amount: 25 },
+      ],
+    })))
+  })
+
+  it('shows top-level totals by lot and category without counting breakdowns twice', () => {
+    const permit = { id: 1, costId: 'permit', version: 1, name: 'Building Permit', amount: 42954, ownerId: 1, phase: 'construction', category: 'Permits & municipal fees', lotAllocations: [{ lot: 'Lot 3', amount: 10872 }, { lot: 'Lot 4', amount: 32082 }], date: '2026-07-17', attachments: [] }
+    const utility = { id: 2, costId: 'utility', version: 1, name: 'Water/Sewer Connection – Lot 3', amount: 8197.15, ownerId: 1, phase: 'construction', category: 'Site utilities', lotAllocations: [{ lot: 'Lot 3', amount: 8197.15 }], date: '2026-07-17', attachments: [] }
+    const detail = { ...permit, id: 3, costId: 'detail', parentCostId: 'permit', name: 'Permit detail', amount: 1000 }
+    render(<CostPage
+      owners={[{ id: 1, name: 'GreenFort' }]}
+      developmentCosts={[permit, utility]}
+      breakdownCosts={[detail]}
+      costVersions={[permit, utility, detail]}
+      lotCommitments={[{ lot: 'Lot 3' }, { lot: 'Lot 4' }]}
+      onBack={() => {}}
+      onAddDevelopmentCost={() => {}}
+      onEditDevelopmentCost={() => {}}
+      onDeleteDevelopmentCost={() => {}}
+    />)
+
+    expect(screen.getByRole('heading', { name: 'All costs by lot and category' })).toBeInTheDocument()
+    expect(screen.getAllByText('$51,151.15').length).toBeGreaterThan(0)
+    expect(screen.getByText('$19,069.15')).toBeInTheDocument()
+    expect(screen.getAllByText('Permits & municipal fees').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Site utilities').length).toBeGreaterThan(0)
+  })
 })

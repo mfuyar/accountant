@@ -90,7 +90,7 @@ function IntakePage({ activeProject, savedItems = [], onSaveIntakeItem, onBack }
 
     let classificationName = 'Uncategorized'
     try {
-      const classification = await suggestCategory(parsedInvoice.description, activeProject?.name || 'Project')
+      const classification = await suggestCategory(parsedInvoice.description, activeProject?.name || 'Project', activeProject?.id)
       classificationName = classification?.category ?? 'Uncategorized'
     } catch {
       // Saving the invoice is more important than an optional AI suggestion.
@@ -134,10 +134,10 @@ function IntakePage({ activeProject, savedItems = [], onSaveIntakeItem, onBack }
     setMessage(`Processing ${file.name}`)
 
     try {
-      const extracted = await extractTransactionFromImage(file, activeProject?.name || 'Project')
+      const extracted = await extractTransactionFromImage(file, activeProject?.name || 'Project', activeProject?.id)
       let classificationName = 'Uncategorized'
       try {
-        const classification = await suggestCategory(`${extracted.vendor || ''} ${extracted.description || ''}`, activeProject?.name || 'Project')
+        const classification = await suggestCategory(`${extracted.vendor || ''} ${extracted.description || ''}`, activeProject?.name || 'Project', activeProject?.id)
         classificationName = classification?.category ?? 'Uncategorized'
       } catch {
         // Keep the extracted document in the queue even without an AI suggestion.
@@ -185,10 +185,10 @@ function IntakePage({ activeProject, savedItems = [], onSaveIntakeItem, onBack }
     setMessage(`Reading statement ${file.name}`)
 
     try {
-      const extracted = await extractTransactionFromImage(file, activeProject?.name || 'Project')
+      const extracted = await extractTransactionFromImage(file, activeProject?.name || 'Project', activeProject?.id)
       let classificationName = 'Uncategorized'
       try {
-        const classification = await suggestCategory(`bank statement ${extracted.description || ''}`, activeProject?.name || 'Project')
+        const classification = await suggestCategory(`bank statement ${extracted.description || ''}`, activeProject?.name || 'Project', activeProject?.id)
         classificationName = classification?.category ?? 'Uncategorized'
       } catch {
         // Keep the extracted statement in the queue even without an AI suggestion.

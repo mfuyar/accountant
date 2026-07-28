@@ -16,6 +16,27 @@ const phaseLabel = (phase) => ({
   other: 'Other',
 }[phase] || phase || 'Development')
 
+const COST_CATEGORIES = [
+  'Permits & municipal fees', 'Site utilities', 'Site work', 'Foundation',
+  'Framing', 'Roofing', 'Mechanical', 'Electrical', 'Plumbing',
+  'Interior finishes', 'Professional fees', 'Financing costs', 'Other',
+]
+
+const costAllocationLabel = (cost) => {
+  const allocations = cost.lotAllocations || []
+  if (!allocations.length) return 'Unassigned lot'
+  if (allocations.length === 1 && Number(allocations[0].amount) === Number(cost.amount)) return allocations[0].lot
+  return `Shared: ${allocations.map((entry) => entry.lot).join(', ')}`
+}
+
+const splitAmountEvenly = (amount, lots) => {
+  if (!lots.length) return {}
+  const totalCents = Math.round(Number(amount || 0) * 100)
+  const baseCents = Math.floor(totalCents / lots.length)
+  const remainder = totalCents - (baseCents * lots.length)
+  return Object.fromEntries(lots.map((lot, index) => [lot, ((baseCents + (index < remainder ? 1 : 0)) / 100).toFixed(2)]))
+}
+
 const validateCostDocument = (file) => {
   if (!file) return 'Choose a file before uploading.'
   const supportedType = file.type.startsWith('image/') || file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
@@ -24,7 +45,7 @@ const validateCostDocument = (file) => {
   return ''
 }
 
-function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions, constructionDrafts = [], projectChecks = [], initialParentCostId = null, onBack, onAddDevelopmentCost, onEditDevelopmentCost, onDeleteDevelopmentCost, onUploadDocument, onAttachDocument, onOpenDocument, onMergeBreakdowns, onAddItemsToGroup, onUnmergeGroup, onSaveConstructionDraft, onConvertConstructionDraft, sharedDevelopmentCostTotal = 0 }) {
+function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions, constructionDrafts = [], projectChecks = [], lotCommitments = [], initialParentCostId = null, initialEditCostId = null, onBack, onAddDevelopmentCost, onEditDevelopmentCost, onDeleteDevelopmentCost, onUploadDocument, onAttachDocument, onOpenDocument, onMergeBreakdowns, onAddItemsToGroup, onUnmergeGroup, onSaveConstructionDraft, onConvertConstructionDraft, sharedDevelopmentCostTotal = 0 }) {
   const getDefaultOwnerId = (ownerList) => {
     const normalized = (value) => value?.toLowerCase().replace(/\s+/g, '').trim()
     const greenfortOwner = (ownerList || []).find((owner) => {
@@ -41,6 +62,9 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
   const [costDate, setCostDate] = useState(() => initialParentCost?.date || '')
   const [selectedOwnerId, setSelectedOwnerId] = useState(() => initialParentCost?.ownerId ?? getDefaultOwnerId(owners))
   const [costPhase, setCostPhase] = useState(() => initialParentCost?.phase || 'development')
+  const [costCategory, setCostCategory] = useState(() => initialParentCost?.category || '')
+  const [costLot, setCostLot] = useState('')
+  const [sharedLotAmounts, setSharedLotAmounts] = useState({})
   const [attachments, setAttachments] = useState([])
   const [uploadStatus, setUploadStatus] = useState(() => initialParentCost ? `Adding a breakdown inside ${initialParentCost.name}` : '')
   const [formError, setFormError] = useState('')
@@ -68,8 +92,11 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
   const costNameInputRef = useRef(null)
   const costListRef = useRef(null)
   const historyRef = useRef(null)
+  const initialEditAppliedRef = useRef(false)
 
   const ownerOptions = useMemo(() => owners || [], [owners])
+  const lotOptions = useMemo(() => [...new Set((lotCommitments || []).map((entry) => entry.lot).filter(Boolean))], [lotCommitments])
+  const allocationLotOptions = useMemo(() => lotOptions.filter((lot) => /^Lot\s+\d+$/i.test(lot)), [lotOptions])
   const availableParentCosts = useMemo(
     () => developmentCosts.filter((cost) => cost.costId !== editingCostId),
     [developmentCosts, editingCostId],
@@ -112,6 +139,32 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
   const totalOther = useMemo(() => {
     return developmentCosts.filter((cost) => cost.phase === 'other').reduce((sum, cost) => sum + Number(cost.amount || 0), 0)
   }, [developmentCosts])
+
+  const costAnalysis = useMemo(() => {
+    const byLot = new Map(lotOptions.map((lot) => [lot, 0]))
+    const byCategory = new Map()
+    let unassigned = 0
+
+    developmentCosts.forEach((cost) => {
+      const amount = Number(cost.amount || 0)
+      const category = cost.category || 'Uncategorized'
+      byCategory.set(category, Number(byCategory.get(category) || 0) + amount)
+      const allocations = cost.lotAllocations || []
+      const allocated = allocations.reduce((sum, entry) => {
+        const allocationAmount = Number(entry.amount || 0)
+        byLot.set(entry.lot, Number(byLot.get(entry.lot) || 0) + allocationAmount)
+        return sum + allocationAmount
+      }, 0)
+      unassigned += Math.max(0, amount - allocated)
+    })
+
+    return {
+      total: developmentCosts.reduce((sum, cost) => sum + Number(cost.amount || 0), 0),
+      byLot: [...byLot.entries()].map(([name, amount]) => ({ name, amount })).filter((entry) => entry.amount > 0),
+      byCategory: [...byCategory.entries()].map(([name, amount]) => ({ name, amount })).sort((a, b) => b.amount - a.amount),
+      unassigned,
+    }
+  }, [developmentCosts, lotOptions])
 
   const sortedVersions = useMemo(() => {
     return [...(costVersions || [])].sort((a, b) => {
@@ -273,11 +326,25 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
       return
     }
 
+    let lotAllocations = []
+    if (costLot === 'Shared') {
+      lotAllocations = allocationLotOptions.map((lot) => ({ lot, amount: Number(sharedLotAmounts[lot] || 0) })).filter((entry) => entry.amount > 0)
+      const allocated = lotAllocations.reduce((sum, entry) => sum + entry.amount, 0)
+      if (!lotAllocations.length || Math.abs(allocated - amount) > 0.009) {
+        setFormError(`Shared lot allocations must equal ${currency.format(amount)}. Currently allocated ${currency.format(allocated)}.`)
+        return
+      }
+    } else if (costLot) {
+      lotAllocations = [{ lot: costLot, amount }]
+    }
+
     const payload = {
       name: costName.trim(),
       amount,
       ownerId: selectedOwnerId,
       phase: costPhase,
+      category: costCategory,
+      lotAllocations,
       date: costDate,
       attachments,
       parentCostId: costEntryType === 'breakdown' ? parentCostId : null,
@@ -305,6 +372,9 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
     setCostName('')
     setCostAmount('')
     setCostDate('')
+    setCostCategory('')
+    setCostLot('')
+    setSharedLotAmounts({})
     setAttachments([])
     setEditingCostId(null)
     setParentCostId(null)
@@ -321,6 +391,11 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
     setCostDate(cost.date || '')
     setSelectedOwnerId(cost.ownerId)
     setCostPhase(cost.phase || 'development')
+    setCostCategory(cost.category || '')
+    const existingAllocations = cost.lotAllocations || []
+    const isSingleLot = existingAllocations.length === 1 && Number(existingAllocations[0].amount) === Number(cost.amount)
+    setCostLot(isSingleLot ? existingAllocations[0].lot : (existingAllocations.length ? 'Shared' : ''))
+    setSharedLotAmounts(Object.fromEntries(existingAllocations.map((entry) => [entry.lot, entry.amount])))
     setAttachments(cost.attachments || [])
     setParentCostId(cost.parentCostId || null)
     setCostEntryType(cost.parentCostId ? 'breakdown' : 'cost')
@@ -329,6 +404,14 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
     setUploadStatus(`Editing ${cost.name} · version ${cost.version}`)
     revealEditor()
   }
+
+  useEffect(() => {
+    if (!initialEditCostId || initialEditAppliedRef.current) return
+    const cost = [...developmentCosts, ...breakdownCosts].find((entry) => entry.costId === initialEditCostId)
+    if (!cost) return
+    initialEditAppliedRef.current = true
+    handleStartEdit(cost)
+  }, [initialEditCostId, developmentCosts, breakdownCosts])
 
   const handleStartBreakdown = (parentCost) => {
     setEditingCostId(null)
@@ -340,6 +423,11 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
     setCostDate(parentCost.date || '')
     setSelectedOwnerId(parentCost.ownerId)
     setCostPhase(parentCost.phase || 'development')
+    setCostCategory(parentCost.category || '')
+    const parentAllocations = parentCost.lotAllocations || []
+    const parentSingleLot = parentAllocations.length === 1 && Number(parentAllocations[0].amount) === Number(parentCost.amount)
+    setCostLot(parentSingleLot ? parentAllocations[0].lot : '')
+    setSharedLotAmounts({})
     setAttachments([])
     setFormError('')
     setUploadStatus(`Adding a breakdown inside ${parentCost.name}`)
@@ -351,6 +439,9 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
     setCostName('')
     setCostAmount('')
     setCostDate('')
+    setCostCategory('')
+    setCostLot('')
+    setSharedLotAmounts({})
     setAttachments([])
     setParentCostId(null)
     setCostEntryType('cost')
@@ -391,6 +482,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
     if (!parent) return
     setSelectedOwnerId(parent.ownerId)
     setCostPhase(parent.phase || 'development')
+    setCostCategory(parent.category || '')
     setCostDate(parent.date || '')
   }
 
@@ -647,6 +739,32 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
               </select>
             </label>
             <label>
+              Category
+              <select aria-label="Cost category" value={costCategory} onChange={(event) => setCostCategory(event.target.value)}>
+                <option value="">Uncategorized</option>
+                {COST_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
+              </select>
+            </label>
+            <label>
+              Lot
+              <select aria-label="Cost lot" value={costLot} onChange={(event) => {
+                setCostLot(event.target.value)
+                if (event.target.value !== 'Shared') setSharedLotAmounts({})
+              }}>
+                <option value="">Unassigned</option>
+                {lotOptions.map((lot) => <option key={lot} value={lot}>{lot}</option>)}
+                {allocationLotOptions.length > 1 ? <option value="Shared">Shared across lots</option> : null}
+              </select>
+            </label>
+            {costLot === 'Shared' ? <fieldset className="lot-allocation-editor">
+              <legend>Allocate {currency.format(Number(costAmount || 0))} across lots</legend>
+              <button type="button" className="secondary-button lot-even-split-button" onClick={() => setSharedLotAmounts(splitAmountEvenly(costAmount, allocationLotOptions))}>Split evenly across {allocationLotOptions.length} lots</button>
+              {allocationLotOptions.map((lot) => <label key={lot}>
+                {lot}
+                <input aria-label={`${lot} allocation`} type="number" min="0" step="0.01" value={sharedLotAmounts[lot] ?? ''} onChange={(event) => setSharedLotAmounts((current) => ({ ...current, [lot]: event.target.value }))} />
+              </label>)}
+            </fieldset> : null}
+            <label>
               Owner
               <select aria-label="Owner" value={selectedOwnerId ?? ''} onChange={(event) => setSelectedOwnerId(event.target.value ? Number(event.target.value) : null)}>
                 {ownerOptions.length === 0 ? <option value="">Add an owner first</option> : null}
@@ -704,6 +822,62 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
               </div>
               <div>{currency.format(totalOther)}</div>
             </div>
+          </div>
+        </div>
+
+        <div className="panel cost-analysis-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Cost analysis</p>
+              <h2>All costs by lot and category</h2>
+              <p>Top-level costs only; breakdowns are details and are not counted twice.</p>
+            </div>
+            <strong className="cost-analysis-grand-total">{currency.format(costAnalysis.total)}</strong>
+          </div>
+
+          <div className="cost-analysis-columns">
+            <section>
+              <h3>Cost by lot</h3>
+              <div className="table-card">
+                {costAnalysis.byLot.map((entry) => <div className="table-row" key={entry.name}>
+                  <strong>{entry.name}</strong>
+                  <strong>{currency.format(entry.amount)}</strong>
+                </div>)}
+                {costAnalysis.unassigned > 0 ? <div className="table-row cost-unassigned-row">
+                  <div><strong>Unassigned / shared project</strong><small>Assign these costs to see complete lot totals.</small></div>
+                  <strong>{currency.format(costAnalysis.unassigned)}</strong>
+                </div> : null}
+              </div>
+            </section>
+            <section>
+              <h3>Cost by category</h3>
+              <div className="table-card">
+                {costAnalysis.byCategory.map((entry) => <div className="table-row" key={entry.name}>
+                  <strong>{entry.name}</strong>
+                  <strong>{currency.format(entry.amount)}</strong>
+                </div>)}
+              </div>
+            </section>
+          </div>
+
+          <h3>Detailed cost ledger</h3>
+          <div className="cost-analysis-ledger">
+            {developmentCosts.map((cost) => {
+              const owner = ownerOptions.find((entry) => entry.id === cost.ownerId)
+              const allocations = cost.lotAllocations || []
+              const allocated = allocations.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+              return <article className="cost-analysis-entry" key={cost.costId}>
+                <div>
+                  <strong>{cost.name}</strong>
+                  <p>{owner?.name || 'Owner not assigned'} • {phaseLabel(cost.phase)} • {cost.category || 'Uncategorized'} • {cost.date}</p>
+                  <div className="cost-allocation-chips">
+                    {allocations.map((entry) => <span key={`${cost.costId}-${entry.lot}`}>{entry.lot}: {currency.format(entry.amount)}</span>)}
+                    {allocated < Number(cost.amount || 0) ? <span className="unassigned">Unassigned: {currency.format(Number(cost.amount || 0) - allocated)}</span> : null}
+                  </div>
+                </div>
+                <strong>{currency.format(cost.amount)}</strong>
+              </article>
+            })}
           </div>
         </div>
       </section>
@@ -780,7 +954,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                 <div className={`table-row cost-parent-row${editingCostId === cost.costId ? ' is-being-edited' : ''}`}>
                   <div className="cost-row-summary">
                     <strong>{cost.name}</strong>
-                    <p>{owner?.name || 'Owner'} • {phaseLabel(cost.phase)} • {cost.date}</p>
+                    <p>{owner?.name || 'Owner'} • {phaseLabel(cost.phase)} • {cost.category || 'Uncategorized'} • {costAllocationLabel(cost)} • {cost.date}</p>
                   </div>
                   <div className="cost-row-amount">{currency.format(cost.amount)}</div>
                   <div className="button-row cost-row-actions">
@@ -858,7 +1032,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                               <strong>↳ {child.name}</strong>
                             </label>
                           )}
-                          <p>{mergedItems.length ? 'Merged breakdown total' : `Breakdown of ${cost.name}`} • {phaseLabel(child.phase)} • {child.date}</p>
+                          <p>{mergedItems.length ? 'Merged breakdown total' : `Breakdown of ${cost.name}`} • {phaseLabel(child.phase)} • {child.category || 'Uncategorized'} • {costAllocationLabel(child)} • {child.date}</p>
                         </div>
                         <div className="cost-row-amount">{currency.format(child.amount)}</div>
                         <div className="button-row cost-row-actions">

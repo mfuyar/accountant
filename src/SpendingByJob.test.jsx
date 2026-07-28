@@ -74,4 +74,24 @@ describe('SpendingByJob', () => {
     // $40,000 (Lot Cost) + $40,000 (Framing spent) of $40,000 (Lot Cost) + $80,000 (Framing estimated).
     expect(screen.getByText('$80,000 of $120,000')).toBeInTheDocument()
   })
+
+  it('groups manually entered construction costs by category and saved lot allocation', () => {
+    const activeCosts = [
+      { costId: 'permit', name: 'Building Permit', amount: 42954, phase: 'construction', category: 'Permits & municipal fees', date: '2026-07-17', lotAllocations: [{ lot: 'Lot 1', amount: 10501 }, { lot: 'Lot 2', amount: 10966 }, { lot: 'Lot 3', amount: 10872 }, { lot: 'Lot 4', amount: 10615 }] },
+      { costId: 'utility', name: 'Water/Sewer Connection', amount: 8197.15, phase: 'construction', category: 'Site utilities', date: '2026-07-17', lotAllocations: [{ lot: 'Lot 3', amount: 8197.15 }] },
+      { costId: 'utility-detail', parentCostId: 'utility', name: 'Receipt detail', amount: 8197.15, phase: 'construction', category: 'Site utilities', lotAllocations: [{ lot: 'Lot 3', amount: 8197.15 }] },
+    ]
+
+    render(<SpendingByJob activeCosts={activeCosts} />)
+
+    const permitCategory = screen.getByText('Permits & municipal fees', { selector: 'strong' }).closest('tr')
+    const cells = within(permitCategory).getAllByRole('cell')
+    expect(within(cells[1]).getByText('$10,501')).toBeInTheDocument()
+    expect(within(cells[3]).getByText('$10,872')).toBeInTheDocument()
+    expect(within(cells[5]).getByText('$42,954')).toBeInTheDocument()
+    expect(screen.getByText('Water/Sewer Connection')).toBeInTheDocument()
+    expect(screen.getByText('Lot 3: $8,197')).toBeInTheDocument()
+    expect(screen.queryByText('Receipt detail')).not.toBeInTheDocument()
+    expect(screen.getByText('$51,151 of $0')).toBeInTheDocument()
+  })
 })

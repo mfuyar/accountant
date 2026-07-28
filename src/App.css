@@ -177,19 +177,149 @@ button:disabled {
 }
 
 .access-badge {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 6px;
-  padding: 12px 14px;
-  border: 1px solid #bfdbfe;
-  border-radius: 16px;
-  background: #eff6ff;
+  display: grid;
+  gap: 7px;
+  min-width: 220px;
+  max-width: 285px;
+  padding: 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #fff 0%, #f8fafc 100%);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
 }
 
 .access-badge span {
   color: #475569;
   font-size: 0.85rem;
+}
+
+.access-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.access-identity > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.access-identity strong {
+  font-size: 0.88rem;
+}
+
+.access-identity > div span {
+  font-size: 0.76rem;
+}
+
+.access-identity > div span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.access-avatar {
+  display: grid;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #1d4ed8, #0f766e);
+  color: white !important;
+  font-size: 0.82rem !important;
+  font-weight: 800;
+}
+
+.account-menu-toggle {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: #e2e8f0;
+  color: #334155;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.account-menu-toggle:hover {
+  background: #cbd5e1;
+}
+
+.access-menu-details {
+  display: grid;
+  gap: 7px;
+  padding-top: 7px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.access-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.database-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border: 1px solid #bbf7d0;
+  border-radius: 9px;
+  background: #f0fdf4;
+}
+
+.database-status > div {
+  display: grid;
+  gap: 1px;
+}
+
+.database-status strong {
+  color: #166534;
+  font-size: 0.74rem;
+}
+
+.database-status small {
+  color: #4b5563;
+  font-size: 0.68rem;
+}
+
+.database-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.14);
+}
+
+.access-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.access-actions button {
+  flex: 1;
+  min-height: 30px;
+  padding: 6px 8px;
+  font-size: 0.75rem;
+}
+
+.access-sign-out {
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #fff;
+  color: #b91c1c;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.access-sign-out:hover {
+  background: #fef2f2;
 }
 
 .auth-shell {
@@ -239,7 +369,11 @@ button:disabled {
   gap: 8px;
   margin-top: 6px;
   padding-top: 10px;
-  border-top: 1px solid #bfdbfe;
+  border-top: 1px solid #e2e8f0;
+}
+
+.account-security-form > small:not(.validation-error):not(.password-success) {
+  color: #64748b;
 }
 
 .account-security-form input {
@@ -1088,6 +1222,42 @@ p.check-link-summary {
 
 .spending-by-job-unassigned {
   color: #b45309 !important;
+}
+
+.spending-manual-heading {
+  margin-top: 24px;
+}
+
+.spending-manual-category {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.spending-manual-category h3 {
+  margin: 0 0 10px;
+}
+
+.spending-manual-lots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.spending-manual-lots span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.spending-manual-lots span.unassigned {
+  background: #fff7ed;
+  color: #c2410c;
 }
 
 .lot-bulk-upload {
@@ -2260,6 +2430,197 @@ p.check-link-summary {
   border-radius: 10px;
   padding: 10px 12px;
   font: inherit;
+}
+
+.lot-allocation-editor {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+}
+
+.lot-allocation-editor legend {
+  padding: 0 6px;
+  color: #334155;
+  font-weight: 700;
+}
+
+.lot-even-split-button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.cost-analysis-grand-total {
+  color: #0f766e;
+  font-size: clamp(1.4rem, 3vw, 2rem);
+}
+
+.cost-analysis-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-bottom: 22px;
+}
+
+.cost-analysis-columns h3,
+.cost-analysis-panel > h3 {
+  margin: 0 0 10px;
+}
+
+.cost-unassigned-row {
+  background: #fff7ed;
+}
+
+.cost-analysis-ledger {
+  display: grid;
+  gap: 10px;
+}
+
+.cost-analysis-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+  padding: 14px 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.cost-analysis-entry p {
+  margin: 4px 0 8px;
+  color: #64748b;
+}
+
+.cost-allocation-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cost-allocation-chips span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.cost-allocation-chips span.unassigned {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.overview-phase-card.is-unassigned {
+  border-color: #fdba74;
+  background: #fff7ed;
+}
+
+.overview-cost-heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+}
+
+.overview-cost-heading-actions label {
+  display: grid;
+  gap: 4px;
+  color: #475569;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.overview-cost-heading-actions select {
+  min-width: 150px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 9px 11px;
+  background: white;
+  font: inherit;
+}
+
+.overview-cost-attachments {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #eff6ff;
+}
+
+.overview-cost-attachments > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.overview-lot-portion {
+  display: block;
+  margin-top: 4px;
+  color: #047857;
+  font-weight: 700;
+}
+
+.overview-filtered-phase-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.overview-filtered-phase-totals span {
+  padding: 4px 8px;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #475569;
+  font-size: 0.76rem;
+}
+
+.overview-filtered-phase-totals strong {
+  margin-left: 3px;
+  color: #1e3a8a;
+}
+
+.lot-cost-detail-list {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #d1fae5;
+  border-radius: 12px;
+  background: #f0fdf4;
+}
+
+.lot-cost-detail-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #d1fae5;
+}
+
+.lot-cost-detail-list small {
+  display: block;
+  margin-top: 3px;
+  color: #64748b;
+}
+
+@media (max-width: 760px) {
+  .cost-analysis-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .cost-analysis-entry {
+    grid-template-columns: 1fr;
+  }
 }
 
 .bank-filter-grid {

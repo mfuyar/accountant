@@ -20,11 +20,59 @@ const emptyChecks = []
 const emptyCosts = []
 
 function SpendingByJob({ constructionDrafts = emptyDrafts, checks = emptyChecks, activeCosts = emptyCosts, sharedDevelopmentCostTotal = 0 }) {
+  const manualCosts = useMemo(() => {
+    const draftCostIds = new Set(constructionDrafts.map((draft) => draft.convertedCostId).filter(Boolean))
+    const draftNames = new Set(constructionDrafts.filter((draft) => draft.name !== SHARED_DEVELOPMENT_COST_JOB_NAME).map((draft) => draft.name))
+    return activeCosts.filter((cost) => (
+      !cost.parentCostId
+      && cost.phase === 'construction'
+      && !draftCostIds.has(cost.costId)
+      && !draftNames.has(cost.name)
+    ))
+  }, [activeCosts, constructionDrafts])
+
+  const hasAllocatedManualCosts = manualCosts.some((cost) => (cost.lotAllocations || []).length || cost.category)
+
+  const manualCategoryRows = useMemo(() => {
+    const categories = new Map()
+    manualCosts.forEach((cost) => {
+      const category = cost.category || 'Uncategorized'
+      if (!categories.has(category)) {
+        categories.set(category, { name: category, costs: [], byLot: Object.fromEntries(allLots.map((lot) => [lot, 0])), total: 0, unassigned: 0 })
+      }
+      const row = categories.get(category)
+      const allocations = cost.lotAllocations || []
+      const allocated = allocations.reduce((sum, entry) => {
+        const amount = Number(entry.amount || 0)
+        if (allLots.includes(entry.lot)) row.byLot[entry.lot] += amount
+        return sum + amount
+      }, 0)
+      row.total += Number(cost.amount || 0)
+      row.unassigned += Math.max(0, Number(cost.amount || 0) - allocated)
+      row.costs.push(cost)
+    })
+    return [...categories.values()].sort((a, b) => b.total - a.total)
+  }, [manualCosts])
+
   const rows = useMemo(() => {
     const sharedLotCost = sharedDevelopmentCostTotal / allLots.length
 
     return constructionDrafts.map((draft) => {
       if (draft.name === SHARED_DEVELOPMENT_COST_JOB_NAME) {
+        if (hasAllocatedManualCosts) {
+          const byLot = Object.fromEntries(allLots.map((lot) => [lot, manualCategoryRows.reduce((sum, row) => sum + row.byLot[lot], 0)]))
+          const total = manualCategoryRows.reduce((sum, row) => sum + row.total, 0)
+          const unassigned = manualCategoryRows.reduce((sum, row) => sum + row.unassigned, 0)
+          return {
+            id: draft.id,
+            name: draft.name,
+            estimatedByLot: byLot,
+            estimatedTotal: total,
+            spentByLot: byLot,
+            spentTotal: total,
+            unassignedSpent: unassigned,
+          }
+        }
         const byLot = {}
         allLots.forEach((lot) => { byLot[lot] = sharedLotCost })
         return {
@@ -72,7 +120,7 @@ function SpendingByJob({ constructionDrafts = emptyDrafts, checks = emptyChecks,
         unassignedSpent,
       }
     })
-  }, [constructionDrafts, checks, activeCosts, sharedDevelopmentCostTotal])
+  }, [constructionDrafts, checks, activeCosts, sharedDevelopmentCostTotal, hasAllocatedManualCosts, manualCategoryRows])
 
   const grandEstimatedByLot = useMemo(() => {
     const totals = {}
@@ -88,6 +136,9 @@ function SpendingByJob({ constructionDrafts = emptyDrafts, checks = emptyChecks,
 
   const grandEstimated = allLots.reduce((sum, lot) => sum + grandEstimatedByLot[lot], 0)
   const grandSpent = rows.reduce((sum, row) => sum + row.spentTotal, 0)
+  const hasLotCostRow = rows.some((row) => row.name === SHARED_DEVELOPMENT_COST_JOB_NAME)
+  const manualSpent = manualCategoryRows.reduce((sum, row) => sum + row.total, 0)
+  const displayedGrandSpent = grandSpent + (hasLotCostRow ? 0 : manualSpent)
 
   return (
     <section className="panel">
@@ -98,10 +149,10 @@ function SpendingByJob({ constructionDrafts = emptyDrafts, checks = emptyChecks,
         </div>
         <div className="metric-stack">
           <span>Total spent of estimated</span>
-          <strong>{currency.format(grandSpent)} of {currency.format(grandEstimated)}</strong>
+          <strong>{currency.format(displayedGrandSpent)} of {currency.format(grandEstimated)}</strong>
         </div>
       </div>
-      <p className="hero-copy">Spending is matched to a job by the cost each check is attached to (Check Printing → "Attach this check to"), split by whichever lot the check is tagged with. Checks attached to a job's cost but not tagged with a lot show up as "unassigned." "Lot Cost" is driven by the project's total development cost, split evenly across all 4 lots.</p>
+      <p className="hero-copy">Draft jobs use attached checks. Manually entered construction costs use their saved category and lot allocations. Breakdown records are not counted again. Costs without a complete lot allocation appear as unassigned.</p>
 
       <div className="spending-by-job-scroll">
         <table className="spending-by-job-table">
@@ -146,6 +197,37 @@ function SpendingByJob({ constructionDrafts = emptyDrafts, checks = emptyChecks,
           </tfoot> : null}
         </table>
       </div>
+
+      <div className="overview-section-heading spending-manual-heading">
+        <div>
+          <p className="eyebrow">Manual ledger</p>
+          <h3>Manual costs by category and lot</h3>
+        </div>
+        <strong>{currency.format(manualSpent)}</strong>
+      </div>
+      <div className="spending-by-job-scroll">
+        <table className="spending-by-job-table spending-manual-table">
+          <thead><tr><th>Category</th>{allLots.map((lot) => <th key={lot}>{lot}</th>)}<th>Total</th></tr></thead>
+          <tbody>
+            {manualCategoryRows.length === 0 ? <tr><td colSpan={allLots.length + 2}>No unmatched manual construction costs.</td></tr> : manualCategoryRows.map((row) => <tr key={row.name}>
+              <td><strong>{row.name}</strong><small>{row.costs.length} cost{row.costs.length === 1 ? '' : 's'}</small></td>
+              {allLots.map((lot) => <td key={lot}>{currency.format(row.byLot[lot])}</td>)}
+              <td><strong>{currency.format(row.total)}</strong>{row.unassigned > 0 ? <small className="spending-by-job-unassigned">{currency.format(row.unassigned)} unassigned</small> : null}</td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+      {manualCategoryRows.map((row) => <section className="spending-manual-category" key={`detail-${row.name}`}>
+        <h3>{row.name}</h3>
+        {row.costs.map((cost) => <div className="table-row" key={cost.costId}>
+          <div><strong>{cost.name}</strong><small>{cost.date} • {cost.phase}</small></div>
+          <div className="spending-manual-lots">
+            {(cost.lotAllocations || []).map((entry) => <span key={`${cost.costId}-${entry.lot}`}>{entry.lot}: {currency.format(entry.amount)}</span>)}
+            {!(cost.lotAllocations || []).length ? <span className="unassigned">Unassigned lot</span> : null}
+          </div>
+          <strong>{currency.format(cost.amount)}</strong>
+        </div>)}
+      </section>)}
     </section>
   )
 }

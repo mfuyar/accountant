@@ -114,7 +114,7 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, onAddIncome, o
           uploadedAt: new Date().toISOString(),
         })
       }
-      const extracted = await extractLoanDrawFromDocument(file)
+      const extracted = await extractLoanDrawFromDocument(file, projectId)
       const filledFields = []
       if (Number.isFinite(Number(extracted.totalAmount)) && Number(extracted.totalAmount) > 0) {
         setAmount((current) => current === '' ? String(extracted.totalAmount) : current)

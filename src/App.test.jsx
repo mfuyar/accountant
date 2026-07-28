@@ -1,11 +1,22 @@
 import '@testing-library/jest-dom/vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import App from './App'
+import App, { getCostAmountForLotFilter, getPhaseTotalsForLotFilter } from './App'
 import ClassificationPage from './ClassificationPage'
 import { extractTransactionFromImage } from './lib/gemini'
 
 describe('App', () => {
+  it('returns only the selected lot portion of a shared cost', () => {
+    const cost = { amount: 42954, lotAllocations: [{ lot: 'Lot 1', amount: 10501 }, { lot: 'Lot 2', amount: 10966 }, { lot: 'Lot 3', amount: 10872 }, { lot: 'Lot 4', amount: 10615 }] }
+    expect(getCostAmountForLotFilter(cost, 'Lot 1')).toBe(10501)
+    expect(getCostAmountForLotFilter(cost, 'Lot 3')).toBe(10872)
+    expect(getCostAmountForLotFilter(cost, 'all')).toBe(42954)
+    expect(getCostAmountForLotFilter(cost, 'unassigned')).toBe(0)
+    expect(getPhaseTotalsForLotFilter([
+      { ...cost, phase: 'development' },
+      { amount: 4000, phase: 'construction', lotAllocations: [{ lot: 'Lot 1', amount: 1000 }] },
+    ], 'Lot 1')).toEqual({ development: 10501, construction: 1000 })
+  })
   it('hides only the add-cost form while keeping saved costs visible', () => {
     render(<App />)
 
@@ -274,6 +285,7 @@ describe('App', () => {
       onUpdatePassword={onUpdatePassword}
     />)
 
+    fireEvent.click(screen.getByRole('button', { name: 'Account menu' }))
     fireEvent.click(screen.getByRole('button', { name: 'Account security' }))
     fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'secure-password-123' } })
     fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'secure-password-123' } })

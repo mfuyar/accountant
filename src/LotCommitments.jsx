@@ -149,7 +149,7 @@ const lotDraftsFromCommitments = (lotCommitments) => {
   return drafts
 }
 
-function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyIncomes, checks = emptyChecks, activeProjectId, onSaveLotCommitment, onUploadDocument, onOpenDocument, onGetDocumentUrl, sharedDevelopmentCostTotal = 0 }) {
+function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyIncomes, checks = emptyChecks, activeCosts = null, activeProjectId, onSaveLotCommitment, onUploadDocument, onOpenDocument, onGetDocumentUrl, sharedDevelopmentCostTotal = 0 }) {
   const [lotDrafts, setLotDrafts] = useState(() => lotDraftsFromCommitments(lotCommitments))
   const [uploadingLotLetter, setUploadingLotLetter] = useState(null)
   const [message, setMessage] = useState('')
@@ -207,6 +207,21 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
     })
     return totals
   }, [checks])
+
+  const lotLedgerCosts = useMemo(() => {
+    const totals = {}
+    const details = {}
+    allLotKeys.forEach((lot) => { totals[lot] = 0; details[lot] = [] })
+    ;(activeCosts || []).forEach((cost) => {
+      ;(cost.lotAllocations || []).forEach((allocation) => {
+        const amount = Number(allocation.amount || 0)
+        if (!allocation.lot || amount <= 0) return
+        totals[allocation.lot] = Number(totals[allocation.lot] || 0) + amount
+        details[allocation.lot] = [...(details[allocation.lot] || []), { ...cost, allocatedAmount: amount }]
+      })
+    })
+    return { totals, details }
+  }, [activeCosts])
 
   const setLotDraftField = (lot, field, value) => setLotDrafts((current) => ({ ...current, [lot]: { ...current[lot], [field]: value } }))
 
@@ -283,7 +298,7 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
           .map((key) => ({ lot: key, address: working[key].address }))
         let classification = { lot: null, documentType: 'Other', address: '', commitmentAmount: null }
         try {
-          classification = await classifyLotDocument(file, knownLots)
+          classification = await classifyLotDocument(file, knownLots, activeProjectId)
         } catch {
           // Keep the fallback classification — the upload itself already succeeded.
         }
@@ -553,7 +568,7 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
       }
       let extractedAddress = ''
       try {
-        const extracted = await extractLotCommitmentFromDocument(file)
+        const extracted = await extractLotCommitmentFromDocument(file, activeProjectId)
         extractedAddress = extracted.address || ''
       } catch {
         // Address extraction is a bonus for generic documents — the upload itself already succeeded.
@@ -598,7 +613,7 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
         name: storedDocument.name || file.name,
         uploadedAt: new Date().toISOString(),
       } : null
-      const extracted = await extractLotCommitmentFromDocument(file)
+      const extracted = await extractLotCommitmentFromDocument(file, activeProjectId)
       const hadExistingLetter = lotDrafts[lot].attachments.some((entry) => entry.label === 'Commitment Letter')
       const extractedAmountValid = Number.isFinite(Number(extracted.commitmentAmount)) && Number(extracted.commitmentAmount) > 0
       const nextDraft = {
@@ -703,10 +718,9 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
         {allLotKeys.map((lot) => {
           const draft = lotDrafts[lot]
           const isSubdivision = lot === subdivisionKey
-          // Development costs (site work, permits, etc.) aren't tracked per lot — they're project-wide.
-          // Until spending is actually itemized per lot, split the total evenly across all 4 lots so
-          // each carries an equal share of what's been spent developing the subdivision so far.
-          const sharedLotCost = sharedDevelopmentCostTotal / commitmentLotKeys.length
+          const usesLegacySharedCosts = activeCosts == null
+          const ledgerCost = usesLegacySharedCosts ? sharedDevelopmentCostTotal / commitmentLotKeys.length : (lotLedgerCosts.totals[lot] || 0)
+          const ledgerCostDetails = lotLedgerCosts.details[lot] || []
           const hasLoan = loanLotKeys.includes(lot)
           const commitmentAmount = Number(draft.commitmentAmount) || 0
           const drawn = lotDrawnTotals[lot] || 0
@@ -734,7 +748,7 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
                 <span>{draft.permitNumber ? `Permit ${draft.permitNumber}` : 'No permit number yet'}</span>
                 <span>{documentCount} document{documentCount === 1 ? '' : 's'}</span>
                 {!isSubdivision ? <span>Spent {currency.format(spent)}</span> : null}
-                {!isSubdivision ? <span>Dev cost (shared) {currency.format(sharedLotCost)}</span> : null}
+                {!isSubdivision ? <span>{usesLegacySharedCosts ? 'Dev cost (shared)' : 'Allocated costs'} {currency.format(ledgerCost)}</span> : null}
               </span>
               <span className="lot-commitment-toggle-icon" aria-hidden="true">{isExpanded ? '▾' : '▸'}</span>
             </button>
@@ -798,8 +812,15 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
                 {hasLoan ? <span>Drawn so far: {currency.format(drawn)}</span> : null}
                 {hasLoan ? <span>Left: {currency.format(remaining)}</span> : null}
                 {!isSubdivision ? <span>Spent (checks tagged to {lot}): {currency.format(spent)}</span> : null}
-                {!isSubdivision ? <span>Development cost (shared 1/{commitmentLotKeys.length}): {currency.format(sharedLotCost)}</span> : null}
+                {!isSubdivision ? <span>{usesLegacySharedCosts ? `Development cost (shared 1/${commitmentLotKeys.length})` : 'Manual and ledger costs allocated to this lot'}: {currency.format(ledgerCost)}</span> : null}
               </div>
+              {!usesLegacySharedCosts && ledgerCostDetails.length ? <div className="lot-cost-detail-list">
+                <strong>Allocated cost details</strong>
+                {ledgerCostDetails.map((cost) => <div key={`${lot}-${cost.costId}`}>
+                  <span>{cost.name}<small>{cost.category || 'Uncategorized'} • {cost.date}</small></span>
+                  <strong>{currency.format(cost.allocatedAmount)}</strong>
+                </div>)}
+              </div> : null}
               {showSaveButton ? (
                 <div className="button-row">
                   <button type="button" className="secondary-button" onClick={() => saveLotDraft(lot)}>Save {isSubdivision ? 'Subdivision' : lot} {hasLoan ? 'commitment' : 'address'}</button>

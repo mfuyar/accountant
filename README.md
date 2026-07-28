@@ -1,16 +1,33 @@
-# React + Vite
+# Greenfort Accountant
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React/Vite accounting workspace backed by Supabase.
 
-Currently, two official plugins are available:
+## Local setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Copy `.env.example` to `.env` and configure only the browser-safe Supabase URL and
+anonymous/publishable key as `VITE_` variables. Never put service-role or third-party
+API secrets in a `VITE_` variable; Vite embeds those values in the public browser bundle.
 
-## React Compiler
+Configure these server-side secrets on the Supabase Edge Functions:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- `GEMINI_API_KEY`
+- `GEMINI_MODEL` (optional)
+- `ALLOWED_REDIRECT_ORIGINS` — comma-separated trusted application origins, such as
+  `https://accounting.example.com,http://localhost:5173`
 
-## Expanding the Oxlint configuration
+Deploy both `extract-invoice` and `send-project-invite` with JWT verification enabled.
+The functions also validate the user and project membership themselves.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+```sh
+npm install
+npm run dev
+```
+
+## Verification
+
+```sh
+npm test
+npm run lint
+npm run build
+npm audit
+```

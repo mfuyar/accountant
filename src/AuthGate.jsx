@@ -4,7 +4,7 @@ import { fetchAccessProfile, sendMagicLink, signInWithPassword, supabase, update
 function AuthGate({ children }) {
   const [session, setSession] = useState(undefined)
   const [profile, setProfile] = useState(undefined)
-  const [email, setEmail] = useState('mfuyar@gmail.com')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showLinkFallback, setShowLinkFallback] = useState(false)
   const [submitting, setSubmitting] = useState(false)

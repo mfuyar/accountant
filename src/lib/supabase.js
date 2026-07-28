@@ -76,6 +76,10 @@ const normalizeTransaction = (row) => ({
   rawImportRow: row.raw_import_row,
 })
 
+const getLegacyCostDimensions = (row) => (Array.isArray(row.attachments)
+  ? row.attachments.find((attachment) => attachment?._type === 'cost_dimensions')
+  : null)
+
 const normalizeCostVersion = (row) => ({
   id: row.id,
   costId: row.cost_id,
@@ -86,8 +90,10 @@ const normalizeCostVersion = (row) => ({
   name: row.name,
   amount: Number(row.amount || 0),
   phase: row.phase,
+  category: row.category || getLegacyCostDimensions(row)?.category || '',
+  lotAllocations: Array.isArray(row.lot_allocations) && row.lot_allocations.length ? row.lot_allocations : (getLegacyCostDimensions(row)?.lotAllocations || []),
   date: row.cost_date,
-  attachments: Array.isArray(row.attachments) ? row.attachments : [],
+  attachments: Array.isArray(row.attachments) ? row.attachments.filter((attachment) => attachment?._type !== 'cost_dimensions') : [],
   deletedAt: row.deleted_at,
   createdAt: row.created_at,
 })
@@ -354,7 +360,7 @@ export async function sendMagicLink(email) {
   const { error } = await supabase.auth.signInWithOtp({
     email: email.trim().toLowerCase(),
     options: {
-      shouldCreateUser: true,
+      shouldCreateUser: false,
       emailRedirectTo: window.location.origin,
     },
   })
@@ -411,6 +417,20 @@ export async function assignProjectAdmin(projectId, email) {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await supabase.rpc('assign_project_admin', { p_project_id: projectId, p_email: email })
   if (error) throw error
+  return data
+}
+
+export async function sendProjectAdminInvite(projectId, email) {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase.functions.invoke('send-project-invite', {
+    body: {
+      projectId: Number(projectId),
+      email: email.trim().toLowerCase(),
+      redirectTo: window.location.origin,
+    },
+  })
+  if (error) throw new Error(error.message || 'The invitation email could not be sent.')
+  if (data?.error) throw new Error(data.error)
   return data
 }
 
@@ -562,7 +582,7 @@ export async function fetchOwners(projectId) {
 export async function createCostVersion(projectId, cost) {
   if (!supabase) throw new Error('Supabase is not configured')
   const costId = cost.costId || crypto.randomUUID()
-  const { data, error } = await supabase.rpc('create_cost_version_v2', {
+  const v3Payload = {
     p_project_id: projectId,
     p_cost_id: costId,
     p_parent_cost_id: cost.parentCostId || null,
@@ -570,10 +590,37 @@ export async function createCostVersion(projectId, cost) {
     p_name: cost.name,
     p_amount: cost.amount,
     p_phase: cost.phase,
+    p_category: cost.category || null,
+    p_lot_allocations: cost.lotAllocations || [],
     p_cost_date: cost.date,
     p_attachments: cost.attachments || [],
     p_deleted: Boolean(cost.deleted),
-  })
+  }
+  let { data, error } = await supabase.rpc('create_cost_version_v3', v3Payload)
+  if (error?.code === 'PGRST202') {
+    const legacyAttachments = [...(cost.attachments || [])]
+    if (cost.category || (cost.lotAllocations || []).length) {
+      legacyAttachments.push({
+        _type: 'cost_dimensions',
+        category: cost.category || '',
+        lotAllocations: cost.lotAllocations || [],
+      })
+    }
+    const legacyResult = await supabase.rpc('create_cost_version_v2', {
+      p_project_id: projectId,
+      p_cost_id: costId,
+      p_parent_cost_id: cost.parentCostId || null,
+      p_owner_id: cost.ownerId,
+      p_name: cost.name,
+      p_amount: cost.amount,
+      p_phase: cost.phase,
+      p_cost_date: cost.date,
+      p_attachments: legacyAttachments,
+      p_deleted: Boolean(cost.deleted),
+    })
+    data = legacyResult.data
+    error = legacyResult.error
+  }
   if (error) throw error
   const row = Array.isArray(data) ? data[0] : data
   if (!row) throw new Error('The cost version was not returned by Supabase')
@@ -676,11 +723,27 @@ const safeFileName = (name) => String(name || 'document')
   .replace(/[^a-zA-Z0-9._-]+/g, '-')
   .replace(/^-+|-+$/g, '') || 'document'
 
+const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
+const ALLOWED_DOCUMENT_MIME_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+])
+
 export async function uploadProjectDocument(projectId, file) {
   if (!supabase) throw new Error('Supabase is not configured')
   if (projectId == null) throw new Error('Select a project before uploading a document')
+  if (!file || file.size <= 0) throw new Error('Choose a non-empty document to upload')
+  if (file.size > MAX_DOCUMENT_BYTES) throw new Error('Choose a document smaller than 10 MB')
+  const inferredType = file.name?.toLowerCase().endsWith('.pdf') ? 'application/pdf' : ''
+  const contentType = (file.type || inferredType).toLowerCase()
+  if (!ALLOWED_DOCUMENT_MIME_TYPES.has(contentType)) {
+    throw new Error('Only PDF, JPEG, PNG, WebP, HEIC, and HEIF documents are supported')
+  }
   const storagePath = `${projectId}/${crypto.randomUUID()}-${safeFileName(file.name)}`
-  const contentType = file.type || (file.name?.toLowerCase().endsWith('.pdf') ? 'application/pdf' : undefined)
   const { error: uploadError } = await supabase.storage
     .from('accounting-documents')
     .upload(storagePath, file, { contentType, upsert: false })
@@ -708,12 +771,12 @@ export async function uploadProjectDocument(projectId, file) {
   }
 }
 
-export async function createDocumentSignedUrl(attachment) {
+export async function createDocumentSignedUrl(attachment, { download = false } = {}) {
   if (!supabase) throw new Error('Supabase is not configured')
   if (!attachment?.storagePath) throw new Error('This attachment does not have a stored file path')
   const { data, error } = await supabase.storage
     .from(attachment.storageBucket || 'accounting-documents')
-    .createSignedUrl(attachment.storagePath, 60, { download: false })
+    .createSignedUrl(attachment.storagePath, 60, { download: download ? (attachment.name || true) : false })
   if (error) throw error
   return data.signedUrl
 }

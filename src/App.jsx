@@ -6,6 +6,7 @@ import ClassificationPage from './ClassificationPage'
 import IncomeSection from './IncomeSection'
 import LotCommitments from './LotCommitments'
 import SpendingByJob from './SpendingByJob'
+import AttachmentPreviewModal from './AttachmentPreviewModal'
 import TaxAudit from './TaxAudit'
 import BankDashboard from './BankDashboard'
 import AccessAdmin from './AccessAdmin'
@@ -67,6 +68,21 @@ const costPhaseLabel = (phase) => ({
   other: 'Other',
 }[phase] || phase || 'Development')
 
+export const getCostAmountForLotFilter = (cost, lotFilter) => {
+  const amount = Number(cost.amount || 0)
+  if (lotFilter === 'all') return amount
+  const allocations = cost.lotAllocations || []
+  if (lotFilter === 'unassigned') {
+    return Math.max(0, amount - allocations.reduce((sum, entry) => sum + Number(entry.amount || 0), 0))
+  }
+  return allocations.filter((entry) => entry.lot === lotFilter).reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+}
+
+export const getPhaseTotalsForLotFilter = (costs, lotFilter) => costs.reduce((totals, cost) => ({
+  ...totals,
+  [cost.phase || 'other']: Number(totals[cost.phase || 'other'] || 0) + getCostAmountForLotFilter(cost, lotFilter),
+}), {})
+
 function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdatePassword = null }) {
   const persistenceEnabled = Boolean(supabase && accessProfile && authUser)
   const [projects, setProjects] = useState(initialProjects)
@@ -106,6 +122,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
   const [showIntakePage, setShowIntakePage] = useState(false)
   const [showCostPage, setShowCostPage] = useState(false)
   const [breakdownParentCostId, setBreakdownParentCostId] = useState(null)
+  const [costPageEditCostId, setCostPageEditCostId] = useState(null)
   const [showClassificationPage, setShowClassificationPage] = useState(false)
   const [workspaceView, setWorkspaceView] = useState(() => accessProfile ? 'portfolio' : 'project')
   const [workspaceLoadError, setWorkspaceLoadError] = useState('')
@@ -113,10 +130,13 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
   const [projectSection, setProjectSection] = useState('overview')
   const [showOwnerPhaseCostForm, setShowOwnerPhaseCostForm] = useState(true)
   const [expandedOverviewCostIds, setExpandedOverviewCostIds] = useState(() => new Set())
+  const [overviewLotFilter, setOverviewLotFilter] = useState('all')
   const [pendingSquareCostId, setPendingSquareCostId] = useState(null)
   const [squaringCostId, setSquaringCostId] = useState(null)
   const [overviewCostMessage, setOverviewCostMessage] = useState(null)
+  const [overviewPreviewAttachment, setOverviewPreviewAttachment] = useState(null)
   const [showAccountSecurity, setShowAccountSecurity] = useState(false)
+  const [showAccountMenu, setShowAccountMenu] = useState(false)
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [passwordMessage, setPasswordMessage] = useState(null)
@@ -331,6 +351,33 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
     ...totals,
     [cost.phase]: Number(totals[cost.phase] || 0) + Number(cost.amount || 0),
   }), {}), [activeDevelopmentCosts])
+
+  const lotCostSummary = useMemo(() => {
+    const totals = {}
+    let assigned = 0
+    activeDevelopmentCosts.forEach((cost) => {
+      ;(cost.lotAllocations || []).forEach((allocation) => {
+        const amount = Number(allocation.amount || 0)
+        totals[allocation.lot] = Number(totals[allocation.lot] || 0) + amount
+        assigned += amount
+      })
+    })
+    return { totals, unassigned: Math.max(0, ownerCostTotal - assigned) }
+  }, [activeDevelopmentCosts, ownerCostTotal])
+
+  const overviewFilteredCosts = useMemo(() => {
+    if (overviewLotFilter === 'all') return activeDevelopmentCosts
+    return activeDevelopmentCosts.filter((cost) => getCostAmountForLotFilter(cost, overviewLotFilter) > 0)
+  }, [activeDevelopmentCosts, overviewLotFilter])
+
+  const overviewFilteredTotal = useMemo(
+    () => overviewFilteredCosts.reduce((sum, cost) => sum + getCostAmountForLotFilter(cost, overviewLotFilter), 0),
+    [overviewFilteredCosts, overviewLotFilter],
+  )
+  const overviewFilteredPhaseTotals = useMemo(
+    () => getPhaseTotalsForLotFilter(overviewFilteredCosts, overviewLotFilter),
+    [overviewFilteredCosts, overviewLotFilter],
+  )
 
   const handleRemoveReviewItem = async (itemId) => {
     if (persistenceEnabled) {
@@ -621,9 +668,9 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
     setDevelopmentCostError('')
   }
 
-  const handleCostPageAdd = async ({ name, amount, ownerId, phase, date, attachments = [], parentCostId = null }) => {
+  const handleCostPageAdd = async ({ name, amount, ownerId, phase, category = '', lotAllocations = [], date, attachments = [], parentCostId = null }) => {
     if (persistenceEnabled) {
-      const saved = await createCostVersion(activeProjectId, { name, amount, ownerId, phase, date, attachments, parentCostId })
+      const saved = await createCostVersion(activeProjectId, { name, amount, ownerId, phase, category, lotAllocations, date, attachments, parentCostId })
       setDevelopmentCosts((current) => [...current, saved])
       if (!saved.parentCostId) {
         setPortfolioCostTotals((current) => ({
@@ -643,6 +690,8 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       amount,
       ownerId,
       phase,
+      category,
+      lotAllocations,
       date,
       parentCostId,
       attachments,
@@ -702,6 +751,8 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
         amount: breakdownTotal,
         ownerId: cost.ownerId,
         phase: cost.phase,
+        category: cost.category || '',
+        lotAllocations: cost.lotAllocations || [],
         date: cost.date,
         attachments: cost.attachments || [],
         parentCostId: cost.parentCostId || null,
@@ -811,6 +862,19 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
     try {
       const signedUrl = await createDocumentSignedUrl(attachment)
       if (!attachmentWindow) throw new Error('Allow pop-ups to open this attachment')
+      attachmentWindow.opener = null
+      attachmentWindow.location.href = signedUrl
+    } catch (error) {
+      attachmentWindow?.close()
+      throw error
+    }
+  }
+
+  const handleDownloadCostDocument = async (attachment) => {
+    const attachmentWindow = window.open('about:blank', '_blank')
+    try {
+      const signedUrl = await createDocumentSignedUrl(attachment, { download: true })
+      if (!attachmentWindow) throw new Error('Allow pop-ups to download this attachment')
       attachmentWindow.opener = null
       attachmentWindow.location.href = signedUrl
     } catch (error) {
@@ -951,7 +1015,14 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
   }
 
   const handleOpenCostBreakdown = (costId) => {
+    setCostPageEditCostId(null)
     setBreakdownParentCostId(costId)
+    setShowCostPage(true)
+  }
+
+  const handleOpenCostEdit = (costId) => {
+    setBreakdownParentCostId(null)
+    setCostPageEditCostId(costId)
     setShowCostPage(true)
   }
 
@@ -984,10 +1055,13 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
         costVersions={projectCostVersions}
         constructionDrafts={constructionDrafts}
         projectChecks={projectChecks.filter((check) => String(check.projectId) === String(activeProjectId))}
+        lotCommitments={projectLotCommitments}
         initialParentCostId={breakdownParentCostId}
+        initialEditCostId={costPageEditCostId}
         onBack={() => {
           setShowCostPage(false)
           setBreakdownParentCostId(null)
+          setCostPageEditCostId(null)
         }}
         onAddDevelopmentCost={handleCostPageAdd}
         onEditDevelopmentCost={handleCostPageEdit}
@@ -1029,22 +1103,39 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       </div>
       <div className="hero-actions">
         {accessProfile ? (
-          <div className="access-badge">
-            <strong>{accessProfile.is_global_admin ? 'Global administrator' : 'Project administrator'}</strong>
-            <span>{authUser?.email || accessProfile.email}</span>
-            {persistenceEnabled ? <span>Live database connected • UI changes save to Supabase</span> : null}
-            {onUpdatePassword ? <button type="button" className="secondary-button" aria-expanded={showAccountSecurity} onClick={() => {
-              setShowAccountSecurity((current) => !current)
-              setPasswordMessage(null)
-            }}>{showAccountSecurity ? 'Close account security' : 'Account security'}</button> : null}
-            {showAccountSecurity ? <form className="account-security-form" noValidate onSubmit={handlePasswordUpdate}>
-              <strong>Set or change password</strong>
-              <input aria-label="New password" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
-              <input aria-label="Confirm new password" type="password" autoComplete="new-password" placeholder="Confirm password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
-              {passwordMessage ? <small className={passwordMessage.type === 'error' ? 'validation-error' : 'password-success'} role={passwordMessage.type === 'error' ? 'alert' : 'status'}>{passwordMessage.text}</small> : null}
-              <button type="submit" className="action-button" disabled={updatingPassword}>{updatingPassword ? 'Saving…' : 'Save password'}</button>
-            </form> : null}
-            <button type="button" className="secondary-button" onClick={onSignOut}>Sign out</button>
+          <div className={`access-badge${showAccountSecurity ? ' is-expanded' : ''}`}>
+            <div className="access-identity">
+              <span className="access-avatar" aria-hidden="true">{(authUser?.email || accessProfile.email || 'G').charAt(0).toUpperCase()}</span>
+              <div>
+                <strong>{accessProfile.is_global_admin ? 'Global administrator' : 'Project administrator'}</strong>
+              </div>
+              <button type="button" className="account-menu-toggle" aria-label="Account menu" aria-expanded={showAccountMenu} onClick={() => {
+                setShowAccountMenu((current) => !current)
+                if (showAccountMenu) setShowAccountSecurity(false)
+              }}>{showAccountMenu ? '▴' : '▾'}</button>
+            </div>
+            {showAccountMenu ? <div className="access-menu-details">
+              <span className="access-email">{authUser?.email || accessProfile.email}</span>
+              {persistenceEnabled ? <div className="database-status" role="status">
+                <span className="database-status-dot" aria-hidden="true" />
+                <div><strong>Supabase connected</strong><small>Changes save automatically</small></div>
+              </div> : null}
+              <div className="access-actions">
+                {onUpdatePassword ? <button type="button" className="secondary-button" aria-expanded={showAccountSecurity} onClick={() => {
+                  setShowAccountSecurity((current) => !current)
+                  setPasswordMessage(null)
+                }}>{showAccountSecurity ? 'Close security' : 'Account security'}</button> : null}
+                <button type="button" className="access-sign-out" onClick={onSignOut}>Sign out</button>
+              </div>
+              {showAccountSecurity ? <form className="account-security-form" noValidate onSubmit={handlePasswordUpdate}>
+                <strong>Set or change password</strong>
+                <small>Use at least 8 characters. This password is used for future sign-ins.</small>
+                <input aria-label="New password" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
+                <input aria-label="Confirm new password" type="password" autoComplete="new-password" placeholder="Confirm password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
+                {passwordMessage ? <small className={passwordMessage.type === 'error' ? 'validation-error' : 'password-success'} role={passwordMessage.type === 'error' ? 'alert' : 'status'}>{passwordMessage.text}</small> : null}
+                <button type="submit" className="action-button" disabled={updatingPassword}>{updatingPassword ? 'Saving…' : 'Save password'}</button>
+              </form> : null}
+            </div> : null}
           </div>
         ) : null}
         <div className="hero-stat">
@@ -1222,38 +1313,79 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
             ))}
           </div>
 
+          <div className="overview-section-heading">
+            <div>
+              <p className="eyebrow">Lot costs</p>
+              <h3>Allocated manual and saved costs</h3>
+            </div>
+            <button type="button" className="secondary-button" onClick={() => setProjectSection('lots')}>Open lot details</button>
+          </div>
+          <div className="overview-phase-grid overview-lot-cost-grid">
+            {projectLotCommitments.filter((entry) => entry.lot).map((entry) => <div key={entry.lot} className="overview-phase-card">
+              <span>{entry.lot}</span>
+              <strong>{currency.format(lotCostSummary.totals[entry.lot] || 0)}</strong>
+            </div>)}
+            {lotCostSummary.unassigned > 0 ? <div className="overview-phase-card is-unassigned">
+              <span>Unassigned project costs</span>
+              <strong>{currency.format(lotCostSummary.unassigned)}</strong>
+            </div> : null}
+          </div>
+
           <div className="overview-section-heading overview-cost-heading">
             <div>
               <p className="eyebrow">Project costs</p>
-              <h3>{activeDevelopmentCosts.length} active cost{activeDevelopmentCosts.length === 1 ? '' : 's'}</h3>
+              <h3>{overviewFilteredCosts.length} of {activeDevelopmentCosts.length} active cost{activeDevelopmentCosts.length === 1 ? '' : 's'}</h3>
+              <strong>{overviewLotFilter === 'all' ? 'All-lot total' : `${overviewLotFilter === 'unassigned' ? 'Unassigned' : overviewLotFilter} portion`}: {currency.format(overviewFilteredTotal)}</strong>
+              <div className="overview-filtered-phase-totals">
+                {['development', 'construction', 'soft_cost', 'other'].map((phase) => <span key={phase}>
+                  {costPhaseLabel(phase)} <strong>{currency.format(overviewFilteredPhaseTotals[phase] || 0)}</strong>
+                </span>)}
+              </div>
             </div>
-            <button type="button" className="action-button" onClick={() => {
-              setBreakdownParentCostId(null)
-              setShowCostPage(true)
-            }}>Open full cost page</button>
+            <div className="overview-cost-heading-actions">
+              <label>
+                Filter costs by lot
+                <select aria-label="Filter overview costs by lot" value={overviewLotFilter} onChange={(event) => setOverviewLotFilter(event.target.value)}>
+                  <option value="all">All lots</option>
+                  {projectLotCommitments.map((entry) => <option key={entry.lot} value={entry.lot}>{entry.lot}</option>)}
+                  <option value="unassigned">Unassigned</option>
+                </select>
+              </label>
+              <button type="button" className="action-button" onClick={() => {
+                setBreakdownParentCostId(null)
+                setCostPageEditCostId(null)
+                setShowCostPage(true)
+              }}>Open full cost page</button>
+            </div>
           </div>
           {overviewCostMessage ? <div className={`overview-cost-message ${overviewCostMessage.type}`} role={overviewCostMessage.type === 'error' ? 'alert' : 'status'}>
             <span>{overviewCostMessage.text}</span>
             <button type="button" aria-label="Dismiss cost message" onClick={() => setOverviewCostMessage(null)}>×</button>
           </div> : null}
           <div className="overview-cost-grid">
-            {activeDevelopmentCosts.map((cost) => {
+            {overviewFilteredCosts.map((cost) => {
               const owner = owners.find((entry) => entry.id === cost.ownerId)
               const breakdowns = activeBreakdownCosts.filter((entry) => entry.parentCostId === cost.costId)
               const allocated = Math.round(breakdowns.reduce((sum, entry) => sum + Number(entry.amount || 0), 0) * 100) / 100
               const unallocated = Number(cost.amount || 0) - allocated
               const isOverAllocated = unallocated < 0
               const allocationPercent = Number(cost.amount || 0) > 0 ? (allocated / Number(cost.amount)) * 100 : 0
+              const displayedAmount = getCostAmountForLotFilter(cost, overviewLotFilter)
               const detailsExpanded = expandedOverviewCostIds.has(cost.costId)
-              const attachedChecks = projectChecks.filter((check) => check.costId === cost.costId && check.status !== 'voided')
+              const attachedChecks = projectChecks.filter((check) => (
+                check.costId === cost.costId
+                && check.status !== 'voided'
+                && (overviewLotFilter === 'all' || (overviewLotFilter === 'unassigned' ? !check.lot : check.lot === overviewLotFilter))
+              ))
               return <article key={cost.id} className={`dashboard-cost-row overview-cost-card${detailsExpanded ? ' is-expanded' : ''}${isOverAllocated ? ' is-over-allocated' : ''}`}>
                 <div className="overview-cost-card-main">
                   <div className="overview-cost-title-row">
                     <div>
                       <strong>{cost.name}</strong>
-                      <p>{owner?.name || 'Owner not assigned'} • {costPhaseLabel(cost.phase)} • {cost.date}</p>
+                      <p>{owner?.name || 'Owner not assigned'} • {costPhaseLabel(cost.phase)} • {cost.category || 'Uncategorized'} • {cost.date}</p>
+                      {overviewLotFilter !== 'all' ? <small className="overview-lot-portion">Showing {overviewLotFilter === 'unassigned' ? 'unassigned portion' : `${overviewLotFilter} allocation`} of {currency.format(cost.amount)} total</small> : null}
                     </div>
-                    <strong className="overview-cost-amount">{currency.format(cost.amount)}</strong>
+                    <strong className="overview-cost-amount">{currency.format(displayedAmount)}</strong>
                   </div>
                   <div className="overview-allocation-row">
                     <span>{breakdowns.length ? `${breakdowns.length} breakdown${breakdowns.length === 1 ? '' : 's'}` : 'No breakdowns yet'}</span>
@@ -1263,6 +1395,16 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
                     </strong>
                   </div>
                   {attachedChecks.length ? <div className="check-link-summary"><strong>Attached checks</strong>{attachedChecks.map((check) => <span key={check.id}>#{check.checkNumber} · {currency.format(check.amount)} · {check.status}</span>)}</div> : null}
+                  {cost.attachments?.length ? <div className="overview-cost-attachments">
+                    <strong>Attached documents ({cost.attachments.length})</strong>
+                    {cost.attachments.map((attachment) => <div key={attachment.documentId || attachment.id || attachment.storagePath}>
+                      <span>{attachment.name}</span>
+                      <div className="button-row">
+                        <button type="button" className="secondary-button" onClick={() => setOverviewPreviewAttachment(attachment)}>Preview</button>
+                        <button type="button" className="secondary-button" onClick={() => handleDownloadCostDocument(attachment)}>Download</button>
+                      </div>
+                    </div>)}
+                  </div> : null}
                   <div className={`allocation-progress${isOverAllocated ? ' warning' : ''}`} aria-label={`${Math.round(allocationPercent)} percent allocated`}>
                     <span style={{ width: `${Math.min(100, Math.max(0, allocationPercent))}%` }} />
                   </div>
@@ -1286,6 +1428,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
                       aria-controls={`overview-cost-details-${cost.costId}`}
                       onClick={() => toggleOverviewCostDetails(cost.costId)}
                     >{detailsExpanded ? 'Hide details' : `Show details (${breakdowns.length})`}</button> : null}
+                    <button type="button" className="action-button" onClick={() => handleOpenCostEdit(cost.costId)}>Edit cost</button>
                     <button type="button" className="secondary-button" onClick={() => handleOpenCostBreakdown(cost.costId)}>Add breakdown</button>
                   </div>
                 </div>
@@ -1312,9 +1455,9 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
                 </div> : null}
               </article>
             })}
-            {activeDevelopmentCosts.length === 0 ? <div className="cost-empty-state">
-              <strong>No project costs yet</strong>
-              <p>Add the first cost from the Owners & Costs section or open the full cost page.</p>
+            {overviewFilteredCosts.length === 0 ? <div className="cost-empty-state">
+              <strong>{activeDevelopmentCosts.length ? 'No costs match this lot filter' : 'No project costs yet'}</strong>
+              <p>{activeDevelopmentCosts.length ? 'Choose another lot or All lots.' : 'Add the first cost from the Owners & Costs section or open the full cost page.'}</p>
             </div> : null}
           </div>
 
@@ -1483,7 +1626,10 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
                     <small>{breakdowns.length} breakdown{breakdowns.length === 1 ? '' : 's'} • Allocated {currency.format(allocated)} • Unallocated {currency.format(Number(cost.amount || 0) - allocated)}</small>
                   </div>
                   <div>{currency.format(cost.amount)}</div>
-                  <button type="button" className="secondary-button" onClick={() => handleOpenCostBreakdown(cost.costId)}>Add breakdown</button>
+                  <div className="button-row">
+                    <button type="button" className="action-button" onClick={() => handleOpenCostEdit(cost.costId)}>Edit cost</button>
+                    <button type="button" className="secondary-button" onClick={() => handleOpenCostBreakdown(cost.costId)}>Add breakdown</button>
+                  </div>
                 </div>
               )
             })}
@@ -1556,6 +1702,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
         lotCommitments={projectLotCommitments}
         incomes={projectIncomes}
         checks={projectChecks.filter((check) => String(check.projectId) === String(activeProjectId))}
+        activeCosts={activeDevelopmentCosts}
         activeProjectId={activeProjectId}
         onSaveLotCommitment={handleSaveLotCommitment}
         onUploadDocument={handleUploadCostDocument}
@@ -1580,6 +1727,13 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
         onDeleteIncome={handleDeleteIncome}
         onUploadDocument={handleUploadCostDocument}
         onOpenDocument={handleOpenCostDocument}
+      /> : null}
+
+      {overviewPreviewAttachment ? <AttachmentPreviewModal
+        attachment={overviewPreviewAttachment}
+        onClose={() => setOverviewPreviewAttachment(null)}
+        onGetUrl={createDocumentSignedUrl}
+        onDownload={handleDownloadCostDocument}
       /> : null}
 
       {showProjectSection('bank') ? <BankDashboard

@@ -141,6 +141,21 @@ describe('LotCommitments', () => {
     expect(within(subdivisionCard).queryByText(/Dev cost \(shared\)/)).not.toBeInTheDocument()
   })
 
+  it('aggregates manually entered ledger costs by their saved lot allocations', () => {
+    const activeCosts = [
+      { costId: 'permit', name: 'Building Permit', amount: 42954, category: 'Permits & municipal fees', date: '2026-07-17', lotAllocations: [{ lot: 'Lot 3', amount: 10872 }, { lot: 'Lot 4', amount: 10615 }] },
+      { costId: 'utility', name: 'Water/Sewer Connection', amount: 8197.15, category: 'Site utilities', date: '2026-07-17', lotAllocations: [{ lot: 'Lot 3', amount: 8197.15 }] },
+    ]
+    render(<LotCommitments activeCosts={activeCosts} activeProjectId={7} onSaveLotCommitment={() => {}} />)
+
+    fireEvent.click(screen.getByLabelText('Lot 3 details'))
+    const lot3Card = screen.getByLabelText('Lot 3 address').closest('.lot-commitment-card')
+    expect(within(lot3Card).getByText('Allocated costs $19,069.15')).toBeInTheDocument()
+    expect(within(lot3Card).getByText('Manual and ledger costs allocated to this lot: $19,069.15')).toBeInTheDocument()
+    expect(within(lot3Card).getByText('Water/Sewer Connection')).toBeInTheDocument()
+    expect(within(lot3Card).getByText('Site utilities • 2026-07-17')).toBeInTheDocument()
+  })
+
   it('adds a labeled document like a plot plan to a lot, including Lot 1 which has no loan', async () => {
     const onUploadDocument = vi.fn().mockResolvedValue({
       documentId: 'doc-1',
