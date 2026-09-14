@@ -8,7 +8,7 @@ fail the workflow. This tests anonymous database access, not signed-in permissio
 
 ## Activate
 
-1. In the repository's Settings → Secrets and variables → Actions, add repository
+1. In the repository's Settings → Environments → SUPABASE_URL, add environment
    secrets `SUPABASE_URL` and `SUPABASE_ANON_KEY`, using the corresponding
    `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` values from your local `.env`.
    Use the browser-safe key, not a service-role key.
