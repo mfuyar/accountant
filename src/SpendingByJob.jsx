@@ -1,11 +1,5 @@
 import { useMemo } from 'react'
-
-const currency = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 0,
-})
+import { currency } from './lib/currency'
 
 const allLots = ['Lot 1', 'Lot 2', 'Lot 3', 'Lot 4']
 const lotKeysBySourceKey = { lot_1: 'Lot 1', lot_2: 'Lot 2', lot_3: 'Lot 3', lot_4: 'Lot 4' }
@@ -14,6 +8,15 @@ const lotKeysBySourceKey = { lot_1: 'Lot 1', lot_2: 'Lot 2', lot_3: 'Lot 3', lot
 // project-wide development cost — it has no per-check spending of its own to match, so instead of
 // showing $0, it's driven directly by the project's total development cost split evenly per lot.
 const SHARED_DEVELOPMENT_COST_JOB_NAME = 'Lot Cost'
+
+const jobKey = (value) => String(value || '').toLowerCase().replace(/\s+job$/, '').trim()
+
+const costMatchesDraft = (cost, draft) => {
+  if (String(cost.constructionDraftId || '') === String(draft.id)) return true
+  if (cost.phase !== 'construction') return false
+  const draftKey = jobKey(draft.name)
+  return draftKey.length > 2 && [cost.category, cost.name].some((value) => jobKey(value) === draftKey)
+}
 
 const emptyDrafts = []
 const emptyChecks = []
@@ -26,8 +29,10 @@ function SpendingByJob({ constructionDrafts = emptyDrafts, checks = emptyChecks,
     return activeCosts.filter((cost) => (
       !cost.parentCostId
       && cost.phase === 'construction'
+      && !cost.constructionDraftId
       && !draftCostIds.has(cost.costId)
       && !draftNames.has(cost.name)
+      && !constructionDrafts.some((draft) => draft.name !== SHARED_DEVELOPMENT_COST_JOB_NAME && costMatchesDraft(cost, draft))
     ))
   }, [activeCosts, constructionDrafts])
 
@@ -96,14 +101,33 @@ function SpendingByJob({ constructionDrafts = emptyDrafts, checks = emptyChecks,
 
       const matchingCostIds = new Set(
         activeCosts
-          .filter((cost) => cost.name === draft.name || cost.costId === draft.convertedCostId)
+          .filter((cost) => cost.costId === draft.convertedCostId || costMatchesDraft(cost, draft))
           .map((cost) => cost.costId),
       )
-      const relevantChecks = checks.filter((check) => check.status !== 'voided' && check.costId && matchingCostIds.has(check.costId))
+      const mappedCosts = activeCosts.filter((cost) => costMatchesDraft(cost, draft) && cost.costId !== draft.convertedCostId)
+      const mappedCostIds = new Set(mappedCosts.map((cost) => cost.costId))
+      const mappedSpendCosts = mappedCosts.filter((cost) => !mappedCosts.some((child) => child.parentCostId === cost.costId))
+      const representedByCost = new Set(mappedSpendCosts.map((cost) => cost.costId))
+      const relevantChecks = checks.filter((check) => (
+        check.status !== 'voided'
+        && check.checkType !== 'internal_transfer'
+        && check.costId
+        && matchingCostIds.has(check.costId)
+        && !representedByCost.has(check.costId)
+      ))
 
       const spentByLot = {}
       allLots.forEach((lot) => { spentByLot[lot] = 0 })
       let unassignedSpent = 0
+      mappedSpendCosts.forEach((cost) => {
+        const allocations = cost.lotAllocations || []
+        const allocated = allocations.reduce((sum, entry) => {
+          const amount = Number(entry.amount) || 0
+          if (allLots.includes(entry.lot)) spentByLot[entry.lot] += amount
+          return sum + amount
+        }, 0)
+        unassignedSpent += Math.max(0, Number(cost.amount || 0) - allocated)
+      })
       relevantChecks.forEach((check) => {
         if (allLots.includes(check.lot)) spentByLot[check.lot] += Number(check.amount) || 0
         else unassignedSpent += Number(check.amount) || 0
@@ -118,6 +142,7 @@ function SpendingByJob({ constructionDrafts = emptyDrafts, checks = emptyChecks,
         spentByLot,
         spentTotal,
         unassignedSpent,
+        mappedCostCount: mappedCostIds.size,
       }
     })
   }, [constructionDrafts, checks, activeCosts, sharedDevelopmentCostTotal, hasAllocatedManualCosts, manualCategoryRows])

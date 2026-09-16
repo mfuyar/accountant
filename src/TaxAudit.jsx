@@ -1,10 +1,5 @@
 import { useMemo } from 'react'
-
-const currency = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-})
+import { currency } from './lib/currency'
 
 const allLots = ['Lot 1', 'Lot 2', 'Lot 3', 'Lot 4']
 const IRS_1099_NEC_THRESHOLD = 600

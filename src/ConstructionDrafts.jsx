@@ -1,11 +1,5 @@
 import { useMemo, useState } from 'react'
-
-const currency = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 2,
-})
+import { currency } from './lib/currency'
 
 const validateDocument = (file) => {
   if (!file) return 'Choose an image or PDF before uploading.'
@@ -236,7 +230,7 @@ function ConstructionDrafts({ drafts = [], onSaveDraft, onUseDraft, onUploadDocu
                   </label>
                 </div>
                 {draftForm.attachments?.length ? <div className="attachment-list">
-                  {draftForm.attachments.map((attachment) => <button key={attachment.documentId || attachment.id || attachment.storagePath || attachment.name} type="button" onClick={() => onOpenDocument?.(attachment)}>{attachment.name || 'Open document'}</button>)}
+                  {draftForm.attachments.map((attachment) => <button key={attachment.documentId || attachment.id || attachment.storagePath || attachment.name} type="button" onClick={() => onOpenDocument?.(attachment)}>Preview: {attachment.name || 'document'}</button>)}
                 </div> : <small>No files attached yet.</small>}
                 <button type="button" className="action-button" disabled={saving || uploading} onClick={() => saveDraft(draft)}>{saving ? 'Saving…' : 'Save draft details'}</button>
               </div> : null}

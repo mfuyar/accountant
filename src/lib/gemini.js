@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { analysisErrorMessage } from './analysisError'
 
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 const SUPPORTED_MIME_TYPES = new Set([
@@ -55,7 +56,7 @@ async function invokeAnalysis(operation, projectId, payload = {}, file = null) {
   }
 
   const { data, error } = await supabase.functions.invoke('extract-invoice', { body })
-  if (error) throw new Error(error.message || 'Document analysis is unavailable')
+  if (error) throw new Error(await analysisErrorMessage(error))
   if (data?.error) throw new Error(data.error)
   return data
 }
@@ -63,11 +64,13 @@ async function invokeAnalysis(operation, projectId, payload = {}, file = null) {
 function manualExtraction(file, isPdf) {
   return {
     vendor: file.name,
+    vendorMailingAddress: '',
     amount: 0,
     date: '',
     description: isPdf ? 'Uploaded PDF document' : 'Uploaded image',
     entryType: 'unknown',
     reference: '',
+    lotAllocations: [],
     notes: isPdf
       ? 'Automated PDF reading is unavailable. Review this entry manually.'
       : 'Automated document reading is unavailable. Review this entry manually.',
@@ -106,8 +109,13 @@ export async function classifyLotDocument(file, knownLots = [], projectId) {
   }
 }
 
-export async function extractLoanDrawFromDocument(file, projectId) {
-  return (await invokeAnalysis('loan-draw', projectId, {}, file)) || {
+export async function extractLoanDrawFromDocument(file, projectId, knownLots = []) {
+  return (await invokeAnalysis('loan-draw', projectId, {
+    knownLots: knownLots.slice(0, 20).map((entry) => ({
+      lot: String(entry?.lot || '').slice(0, 40),
+      address: String(entry?.address || '').slice(0, 300),
+    })),
+  }, file)) || {
     totalAmount: null,
     date: '',
     drawNumber: '',
@@ -117,9 +125,19 @@ export async function extractLoanDrawFromDocument(file, projectId) {
   }
 }
 
-export async function extractTransactionFromImage(file, projectName, projectId) {
+export async function analyzeMiscellaneousDocument(file, projectId) {
+  return (await invokeAnalysis('misc-document', projectId, {}, file)) || {
+    suggestedName: String(file?.name || 'Project document').replace(/\.[^.]+$/, ''),
+    description: 'Automated document analysis is unavailable. Add a description manually.',
+    documentType: 'Other',
+    documentDate: null,
+  }
+}
+
+export async function extractTransactionFromImage(file, projectName, projectId, context = {}) {
   const isPdf = file.type === 'application/pdf' || file.name?.toLowerCase().endsWith('.pdf')
   return (await invokeAnalysis('invoice', projectId, {
     projectName: String(projectName || 'Project').slice(0, 200),
+    knownLots: Array.isArray(context.knownLots) ? context.knownLots.slice(0, 20).map((lot) => String(lot).slice(0, 40)) : [],
   }, file)) || manualExtraction(file, isPdf)
 }

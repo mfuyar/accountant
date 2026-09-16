@@ -11,6 +11,13 @@ import TaxAudit from './TaxAudit'
 import BankDashboard from './BankDashboard'
 import AccessAdmin from './AccessAdmin'
 import CheckPrinting from './CheckPrinting'
+import FinancingLedger from './FinancingLedger'
+import DevelopmentCostReport from './DevelopmentCostReport'
+import ProjectDocuments from './ProjectDocuments'
+import PartnersSection from './PartnersSection'
+import { analyzeMiscellaneousDocument, extractTransactionFromImage } from './lib/gemini'
+import { extractPdfDocumentText } from './lib/pdfText'
+import { extractVendorMailingAddressFromText } from './lib/vendorAddress'
 import {
   initialCategories,
   initialInvoices,
@@ -24,14 +31,21 @@ import {
   approveReviewItem,
   createCostVersion,
   createDocumentSignedUrl,
+  deleteFinancingTransaction,
   deleteIncome,
   fetchBankTransactions,
+  fetchBankStatementDocuments,
+  fetchMiscellaneousDocuments,
   fetchOwners,
   fetchProjectData,
   fetchProjectWorkspace,
   mergeCostBreakdowns,
   removeReviewItem,
   saveBankTransactions,
+  saveFinancingTransaction,
+  updateFinancingTransactionStatus,
+  updateFinancingTransaction,
+  updateFinancingTransactionTreatment,
   saveIncome,
   saveIntakeItem,
   saveLotCommitment,
@@ -39,27 +53,38 @@ import {
   saveOwner,
   saveProject,
   saveProjectCheck,
+  saveVendorAddress,
   supabase,
   updateBankTransaction,
+  updateCostCategoryBudget,
   updateConstructionDraft,
   updateIncome,
   updateOwner,
   updateProjectCheckStatus,
   updateProjectCheckFunding,
+  updateProjectCheck,
   updateProjectCheckLot,
   updateProjectCheckLink,
   updateProjectCheckTemplate,
   unmergeCostBreakdownGroup,
   uploadProjectDocument,
+  uploadBankStatementDocument,
+  uploadMiscellaneousDocument,
+  deleteMiscellaneousDocument,
+  updateMiscellaneousDocument,
 } from './lib/supabase'
 import { getActiveCosts } from './lib/costVersions'
-
-const currency = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 2,
-})
+import InvoicePaymentWarning from './InvoicePaymentWarning'
+import { deriveDevelopmentFundingIncomes, isPreSaleDepositCost } from './lib/developmentFunding'
+import { currency } from './lib/currency'
+import {
+  createBankLinkToken,
+  disconnectBankConnection,
+  exchangeBankPublicToken,
+  fetchBankConnections,
+  loadPlaidLink,
+  syncBankConnection,
+} from './lib/plaid'
 
 const costPhaseLabel = (phase) => ({
   development: 'Development',
@@ -83,6 +108,40 @@ export const getPhaseTotalsForLotFilter = (costs, lotFilter) => costs.reduce((to
   [cost.phase || 'other']: Number(totals[cost.phase || 'other'] || 0) + getCostAmountForLotFilter(cost, lotFilter),
 }), {})
 
+export const getTopLevelPhaseCostTotals = (costs) => costs
+  .filter((cost) => !cost.parentCostId)
+  .reduce((totals, cost) => ({
+    ...totals,
+    [cost.phase || 'other']: Number(totals[cost.phase || 'other'] || 0) + Number(cost.amount || 0),
+  }), {})
+
+export const getConstructionLotCostTotals = (costs) => costs
+  .filter((cost) => !cost.parentCostId && cost.phase === 'construction')
+  .reduce((result, cost) => {
+    const amount = Number(cost.amount || 0)
+    const allocated = (cost.lotAllocations || []).reduce((sum, allocation) => {
+      const allocationAmount = Number(allocation.amount || 0)
+      result.byLot[allocation.lot] = Number(result.byLot[allocation.lot] || 0) + allocationAmount
+      return sum + allocationAmount
+    }, 0)
+    result.unassigned += Math.max(0, amount - allocated)
+    return result
+  }, { byLot: {}, unassigned: 0 })
+
+export const splitExistingLotAllocationsEvenly = (amount, allocations = []) => {
+  const lots = [...new Set(allocations.map((entry) => entry?.lot).filter(Boolean))]
+  if (!lots.length) return []
+  const totalCents = Math.round(Number(amount || 0) * 100)
+  const baseCents = Math.floor(totalCents / lots.length)
+  const remainder = totalCents - (baseCents * lots.length)
+  return lots.map((lot, index) => ({
+    lot,
+    amount: (baseCents + (index < remainder ? 1 : 0)) / 100,
+  }))
+}
+
+const CONSTRUCTION_BUDGET_LOTS = ['Lot 1', 'Lot 2', 'Lot 3', 'Lot 4']
+
 function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdatePassword = null }) {
   const persistenceEnabled = Boolean(supabase && accessProfile && authUser)
   const [projects, setProjects] = useState(initialProjects)
@@ -95,16 +154,22 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
   const [projectFormError, setProjectFormError] = useState('')
   const [projectSaveMessage, setProjectSaveMessage] = useState('')
   const [categories, setCategories] = useState(initialCategories)
-  const [vendors] = useState(initialVendors)
+  const [categoryBudgetDrafts, setCategoryBudgetDrafts] = useState({})
+  const [categoryLotBudgetDrafts, setCategoryLotBudgetDrafts] = useState({})
+  const [savingCategoryBudgetId, setSavingCategoryBudgetId] = useState(null)
+  const [categoryBudgetMessage, setCategoryBudgetMessage] = useState(null)
+  const [vendors, setVendors] = useState(initialVendors)
   const [invoices, setInvoices] = useState(initialInvoices)
   const [transactions, setTransactions] = useState(initialTransactions)
   const [importRows, setImportRows] = useState(sampleImportRows)
   const [reviewItems, setReviewItems] = useState([])
   const [constructionDrafts, setConstructionDrafts] = useState([])
   const [projectChecks, setProjectChecks] = useState([])
+  const [financingTransactions, setFinancingTransactions] = useState([])
   const [owners, setOwners] = useState([])
   const [ownerName, setOwnerName] = useState('')
   const [ownerContribution, setOwnerContribution] = useState('')
+  const [ownerOwnershipPercentage, setOwnerOwnershipPercentage] = useState('50')
   const [ownerFormError, setOwnerFormError] = useState('')
   const [editingOwnerId, setEditingOwnerId] = useState(null)
   const [developmentCostName, setDevelopmentCostName] = useState('')
@@ -118,6 +183,8 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
   const [incomes, setIncomes] = useState([])
   const [lotCommitments, setLotCommitments] = useState([])
   const [bankTransactions, setBankTransactions] = useState([])
+  const [bankStatementDocuments, setBankStatementDocuments] = useState([])
+  const [miscellaneousDocuments, setMiscellaneousDocuments] = useState([])
   const [activeProjectId, setActiveProjectId] = useState(initialProjects[0]?.id ?? null)
   const [showIntakePage, setShowIntakePage] = useState(false)
   const [showCostPage, setShowCostPage] = useState(false)
@@ -131,10 +198,13 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
   const [showOwnerPhaseCostForm, setShowOwnerPhaseCostForm] = useState(true)
   const [expandedOverviewCostIds, setExpandedOverviewCostIds] = useState(() => new Set())
   const [overviewLotFilter, setOverviewLotFilter] = useState('all')
+  const [overviewCostView, setOverviewCostView] = useState('cards')
   const [pendingSquareCostId, setPendingSquareCostId] = useState(null)
   const [squaringCostId, setSquaringCostId] = useState(null)
   const [overviewCostMessage, setOverviewCostMessage] = useState(null)
   const [overviewPreviewAttachment, setOverviewPreviewAttachment] = useState(null)
+  const [paidInvoicePreview, setPaidInvoicePreview] = useState(null)
+  const [pendingCheckDraft, setPendingCheckDraft] = useState(null)
   const [showAccountSecurity, setShowAccountSecurity] = useState(false)
   const [showAccountMenu, setShowAccountMenu] = useState(false)
   const [newPassword, setNewPassword] = useState('')
@@ -218,6 +288,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
           if (data.owners?.length) {
             setOwners(data.owners)
           }
+          setVendors(data.vendors || [])
           setPortfolioCostTotals(data.projectCostTotals || {})
         }
       } catch {
@@ -245,6 +316,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
             id: owner.id,
             name: owner.name,
             contributionAmount: Number(owner.contribution_amount || 0),
+            ownershipPercentage: Number(owner.ownership_percentage ?? 50),
           })))
         }
       } catch {
@@ -259,6 +331,18 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
     return () => {
       isMounted = false
     }
+  }, [activeProjectId, persistenceEnabled])
+
+  useEffect(() => {
+    let isMounted = true
+    if (!persistenceEnabled || activeProjectId == null) {
+      setMiscellaneousDocuments([])
+      return undefined
+    }
+    fetchMiscellaneousDocuments(activeProjectId)
+      .then((rows) => { if (isMounted) setMiscellaneousDocuments(rows) })
+      .catch(() => { if (isMounted) setMiscellaneousDocuments([]) })
+    return () => { isMounted = false }
   }, [activeProjectId, persistenceEnabled])
 
   useEffect(() => {
@@ -284,7 +368,25 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
         setReviewItems(data.reviewItems)
         setConstructionDrafts(data.constructionDrafts)
         setProjectChecks(data.projectChecks)
+        setFinancingTransactions(data.financingTransactions || [])
         setLotCommitments(data.lotCommitments)
+        const extractedAddresses = new Map()
+        getActiveCosts(data.costVersions).forEach((cost) => {
+          ;(cost.attachments || []).forEach((attachment) => {
+            const name = String(attachment.vendor || '').trim()
+            const mailingAddress = String(attachment.vendorMailingAddress || '').trim()
+            if (name && mailingAddress) extractedAddresses.set(name.toLowerCase(), { name, mailingAddress })
+          })
+        })
+        Promise.all([...extractedAddresses.values()].map((vendor) => saveVendorAddress(activeProjectId, vendor)))
+          .then((savedVendors) => {
+            if (!isMounted) return
+            setVendors((current) => savedVendors.reduce((next, saved) => [
+              ...next.filter((entry) => entry.name.trim().toLowerCase() !== saved.name.trim().toLowerCase()),
+              saved,
+            ], current).sort((a, b) => a.name.localeCompare(b.name)))
+          })
+          .catch(() => {})
       })
       .catch((error) => {
         if (!isMounted) return
@@ -312,6 +414,13 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       .catch(() => {
         if (isMounted) setBankTransactions([])
       })
+    fetchBankStatementDocuments(activeProjectId)
+      .then((statements) => {
+        if (isMounted) setBankStatementDocuments(statements)
+      })
+      .catch(() => {
+        if (isMounted) setBankStatementDocuments([])
+      })
     return () => {
       isMounted = false
     }
@@ -326,17 +435,42 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
     [activeProjectId, developmentCosts],
   )
   const activeCostRecords = useMemo(() => getActiveCosts(projectCostVersions), [projectCostVersions])
-  const activeDevelopmentCosts = useMemo(
-    () => activeCostRecords.filter((cost) => !cost.parentCostId),
+  const developmentFundingCosts = useMemo(
+    () => activeCostRecords.filter((cost) => !cost.parentCostId && isPreSaleDepositCost(cost)),
     [activeCostRecords],
+  )
+  const accountingCostRecords = useMemo(
+    // Pre-sale deposits are a funding source, not a project expense. Keep them
+    // available to the income/funding report without adding them to cost totals.
+    () => activeCostRecords.filter((cost) => !isPreSaleDepositCost(cost)),
+    [activeCostRecords],
+  )
+  const originalCostAddedDates = useMemo(() => {
+    const dates = new Map()
+    projectCostVersions.forEach((cost) => {
+      if (!cost.createdAt) return
+      const key = String(cost.costId ?? cost.id)
+      const current = dates.get(key)
+      if (!current || String(cost.createdAt) < current) dates.set(key, String(cost.createdAt))
+    })
+    return dates
+  }, [projectCostVersions])
+  const costAddedDate = (cost) => String(originalCostAddedDates.get(String(cost.costId ?? cost.id)) || cost.createdAt || '').slice(0, 10) || 'Not available'
+  const activeDevelopmentCosts = useMemo(
+    () => accountingCostRecords.filter((cost) => !cost.parentCostId),
+    [accountingCostRecords],
   )
   const activeBreakdownCosts = useMemo(
-    () => activeCostRecords.filter((cost) => cost.parentCostId),
-    [activeCostRecords],
+    () => accountingCostRecords.filter((cost) => cost.parentCostId),
+    [accountingCostRecords],
   )
-  const projectIncomes = useMemo(
+  const persistedProjectIncomes = useMemo(
     () => incomes.filter((income) => String(income.projectId) === String(activeProjectId)),
     [activeProjectId, incomes],
+  )
+  const projectIncomes = useMemo(
+    () => deriveDevelopmentFundingIncomes(developmentFundingCosts, persistedProjectIncomes, owners),
+    [developmentFundingCosts, owners, persistedProjectIncomes],
   )
   const projectLotCommitments = useMemo(
     () => lotCommitments.filter((commitment) => String(commitment.projectId) === String(activeProjectId)),
@@ -347,10 +481,8 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
     return activeDevelopmentCosts.reduce((sum, cost) => sum + Number(cost.amount || 0), 0)
   }, [activeDevelopmentCosts])
 
-  const phaseCostTotals = useMemo(() => activeDevelopmentCosts.reduce((totals, cost) => ({
-    ...totals,
-    [cost.phase]: Number(totals[cost.phase] || 0) + Number(cost.amount || 0),
-  }), {}), [activeDevelopmentCosts])
+  const phaseCostTotals = useMemo(() => getTopLevelPhaseCostTotals(accountingCostRecords), [accountingCostRecords])
+  const constructionLotCostTotals = useMemo(() => getConstructionLotCostTotals(accountingCostRecords), [accountingCostRecords])
 
   const lotCostSummary = useMemo(() => {
     const totals = {}
@@ -466,6 +598,11 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       setOwnerFormError('Contribution amount must be a valid number of 0 or greater.')
       return
     }
+    const ownershipValue = Number(ownerOwnershipPercentage)
+    if (!Number.isFinite(ownershipValue) || ownershipValue < 0 || ownershipValue > 100) {
+      setOwnerFormError('Ownership percentage must be between 0 and 100.')
+      return
+    }
 
     if (owners.some((owner) => owner.id !== editingOwnerId && owner.name.trim().toLowerCase() === ownerName.trim().toLowerCase())) {
       setOwnerFormError('An owner with this name already exists.')
@@ -477,6 +614,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
         const savedOwner = await updateOwner(editingOwnerId, {
           name: ownerName.trim(),
           contribution_amount: contributionValue,
+          ownership_percentage: ownershipValue,
         })
         if (!savedOwner) {
           setOwnerFormError('Supabase could not save the owner changes. Please try again.')
@@ -487,9 +625,11 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
         ...owner,
         name: ownerName.trim(),
         contributionAmount: contributionValue,
+        ownershipPercentage: ownershipValue,
       } : owner))
       setOwnerName('')
       setOwnerContribution('')
+      setOwnerOwnershipPercentage('50')
       setOwnerFormError('')
       setEditingOwnerId(null)
 
@@ -500,11 +640,13 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       id: Date.now(),
       name: ownerName.trim(),
       contributionAmount: contributionValue,
+      ownershipPercentage: ownershipValue,
     }
 
     setOwners((current) => [...current, newOwner])
     setOwnerName('')
     setOwnerContribution('')
+    setOwnerOwnershipPercentage('50')
     setOwnerFormError('')
     setSelectedOwnerId(newOwner.id)
 
@@ -512,6 +654,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       const savedOwner = await saveOwner({
         name: newOwner.name,
         contribution_amount: newOwner.contributionAmount,
+        ownership_percentage: newOwner.ownershipPercentage,
         project_id: activeProjectId,
       })
       if (savedOwner) {
@@ -519,6 +662,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
           id: savedOwner.id,
           name: savedOwner.name,
           contributionAmount: Number(savedOwner.contribution_amount || 0),
+          ownershipPercentage: Number(savedOwner.ownership_percentage ?? 50),
         }
         setOwners((current) => current.map((owner) => owner.id === newOwner.id ? normalizedOwner : owner))
         setSelectedOwnerId(savedOwner.id)
@@ -598,10 +742,59 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
     }
   }
 
+  const handleCategoryBudgetSave = async (event, category) => {
+    event.preventDefault()
+    const isConstruction = category.phase === 'construction'
+    const lotBudgets = isConstruction ? Object.fromEntries(CONSTRUCTION_BUDGET_LOTS.map((lot) => [
+      lot,
+      Number(categoryLotBudgetDrafts[category.id]?.[lot] ?? category.lotBudgets?.[lot] ?? 0),
+    ])) : undefined
+    const draft = categoryBudgetDrafts[category.id]
+    const amount = isConstruction
+      ? Object.values(lotBudgets).reduce((sum, value) => sum + value, 0)
+      : Number(draft ?? category.budgetedAmount)
+    if (!Number.isFinite(amount) || amount < 0) {
+      setCategoryBudgetMessage({ type: 'error', text: `Enter a valid budget of 0 or greater for ${category.name}.` })
+      return
+    }
+    if (isConstruction && Object.values(lotBudgets).some((value) => !Number.isFinite(value) || value < 0)) {
+      setCategoryBudgetMessage({ type: 'error', text: 'Enter a valid construction budget of 0 or greater for every lot.' })
+      return
+    }
+
+    setSavingCategoryBudgetId(category.id)
+    setCategoryBudgetMessage(null)
+    try {
+      const saved = persistenceEnabled
+        ? await updateCostCategoryBudget(activeProjectId, category.id, amount, lotBudgets)
+        : { ...category, budgetedAmount: amount, ...(lotBudgets ? { lotBudgets } : {}) }
+      setCategories((current) => current.map((entry) => entry.id === category.id ? saved : entry))
+      setCategoryBudgetDrafts((current) => {
+        const next = { ...current }
+        delete next[category.id]
+        return next
+      })
+      setCategoryLotBudgetDrafts((current) => {
+        const next = { ...current }
+        delete next[category.id]
+        return next
+      })
+      setCategoryBudgetMessage({ type: 'success', text: `${category.name} budget saved.` })
+    } catch (error) {
+      setCategoryBudgetMessage({
+        type: 'error',
+        text: `The ${category.name} budget could not be saved: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      })
+    } finally {
+      setSavingCategoryBudgetId(null)
+    }
+  }
+
   const handleStartOwnerEdit = (owner) => {
     setEditingOwnerId(owner.id)
     setOwnerName(owner.name)
     setOwnerContribution(String(owner.contributionAmount ?? 0))
+    setOwnerOwnershipPercentage(String(owner.ownershipPercentage ?? 50))
     setOwnerFormError('')
   }
 
@@ -609,6 +802,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
     setEditingOwnerId(null)
     setOwnerName('')
     setOwnerContribution('')
+    setOwnerOwnershipPercentage('50')
     setOwnerFormError('')
   }
 
@@ -668,9 +862,10 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
     setDevelopmentCostError('')
   }
 
-  const handleCostPageAdd = async ({ name, amount, ownerId, phase, category = '', lotAllocations = [], date, attachments = [], parentCostId = null }) => {
+  const handleCostPageAdd = async ({ name, details = '', constructionDraftId = null, paymentMethod = null, paymentFeePercentage = null, paymentFeeAmount = null, paymentDate = null, invoiceAmount = null, amount, ownerId, phase, category = '', lotAllocations = [], date, attachments = [], parentCostId = null, vendorName = '', mainCategory = '', subcategory = '', payerType = '', payerOwnerId = null, payerName = '', paymentSource = '', referenceNumber = '', reimbursable = false, loanRelated = false, notes = '', recurringFrequency = '', isSoftCostParent = false }) => {
+    const ledgerFields = { vendorName, mainCategory, subcategory, payerType, payerOwnerId, payerName, paymentSource, referenceNumber, reimbursable, loanRelated, notes, recurringFrequency, isSoftCostParent }
     if (persistenceEnabled) {
-      const saved = await createCostVersion(activeProjectId, { name, amount, ownerId, phase, category, lotAllocations, date, attachments, parentCostId })
+      const saved = await createCostVersion(activeProjectId, { name, details, constructionDraftId, paymentMethod, paymentFeePercentage, paymentFeeAmount, paymentDate, invoiceAmount, amount, ownerId, phase, category, lotAllocations, date, attachments, parentCostId, ...ledgerFields })
       setDevelopmentCosts((current) => [...current, saved])
       if (!saved.parentCostId) {
         setPortfolioCostTotals((current) => ({
@@ -687,6 +882,13 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       version: 1,
       projectId: activeProjectId,
       name,
+      details,
+      constructionDraftId,
+      paymentMethod,
+      paymentFeePercentage,
+      paymentFeeAmount,
+      paymentDate,
+      invoiceAmount,
       amount,
       ownerId,
       phase,
@@ -695,6 +897,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       date,
       parentCostId,
       attachments,
+      ...ledgerFields,
       deletedAt: null,
       createdAt: new Date().toISOString(),
     }
@@ -745,14 +948,30 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
     setSquaringCostId(cost.costId)
     setOverviewCostMessage(null)
     try {
+      const nextLotAllocations = splitExistingLotAllocationsEvenly(breakdownTotal, cost.lotAllocations)
+      const feePercentage = Number(cost.paymentFeePercentage)
+      const hasCardFee = cost.invoiceAmount != null && cost.paymentFeeAmount != null && Number.isFinite(feePercentage)
+      const nextInvoiceAmount = cost.invoiceAmount == null
+        ? null
+        : hasCardFee ? Math.round((breakdownTotal / (1 + feePercentage / 100)) * 100) / 100 : breakdownTotal
+      const nextPaymentFeeAmount = cost.paymentFeeAmount == null
+        ? null
+        : Math.round((breakdownTotal - Number(nextInvoiceAmount || 0)) * 100) / 100
       await handleCostPageEdit({
         costId: cost.costId,
         name: cost.name,
+        details: cost.details || '',
+        constructionDraftId: cost.constructionDraftId || null,
+        paymentMethod: cost.paymentMethod || null,
+        paymentFeePercentage: cost.paymentFeePercentage ?? null,
+        paymentFeeAmount: nextPaymentFeeAmount,
+        paymentDate: cost.paymentDate || null,
+        invoiceAmount: nextInvoiceAmount,
         amount: breakdownTotal,
         ownerId: cost.ownerId,
         phase: cost.phase,
         category: cost.category || '',
-        lotAllocations: cost.lotAllocations || [],
+        lotAllocations: nextLotAllocations,
         date: cost.date,
         attachments: cost.attachments || [],
         parentCostId: cost.parentCostId || null,
@@ -760,7 +979,8 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       setPendingSquareCostId(null)
       setOverviewCostMessage({ type: 'success', text: `${cost.name} now matches its breakdown total of ${currency.format(breakdownTotal)}. A new version was saved.` })
     } catch (error) {
-      setOverviewCostMessage({ type: 'error', text: `The parent total could not be updated: ${error instanceof Error ? error.message : 'Unknown error'}` })
+      const details = error?.message || error?.details || error?.hint || String(error || 'Unknown error')
+      setOverviewCostMessage({ type: 'error', text: `The parent total could not be updated: ${details}` })
     } finally {
       setSquaringCostId(null)
     }
@@ -858,16 +1078,66 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
   }
 
   const handleOpenCostDocument = async (attachment) => {
-    const attachmentWindow = window.open('about:blank', '_blank')
-    try {
-      const signedUrl = await createDocumentSignedUrl(attachment)
-      if (!attachmentWindow) throw new Error('Allow pop-ups to open this attachment')
-      attachmentWindow.opener = null
-      attachmentWindow.location.href = signedUrl
-    } catch (error) {
-      attachmentWindow?.close()
-      throw error
+    setOverviewPreviewAttachment(attachment)
+  }
+
+  const handlePrintPaidInvoice = (attachment, details) => {
+    setPaidInvoicePreview({ attachment, details })
+  }
+
+  const handleSaveVendorAddress = async ({ name, mailingAddress }) => {
+    const saved = await saveVendorAddress(activeProjectId, { name, mailingAddress })
+    setVendors((current) => [
+      ...current.filter((entry) => entry.name.trim().toLowerCase() !== saved.name.trim().toLowerCase()),
+      saved,
+    ].sort((a, b) => a.name.localeCompare(b.name)))
+    return saved
+  }
+
+  const handleExtractVendorAddress = async (attachment, vendorName = '') => {
+    const signedUrl = await createDocumentSignedUrl(attachment)
+    const response = await fetch(signedUrl)
+    if (!response.ok) throw new Error('The attached invoice could not be opened for address analysis')
+    const blob = await response.blob()
+    const file = new File([blob], attachment.name || 'invoice', { type: attachment.mimeType || blob.type || 'application/pdf' })
+    const documentText = await extractPdfDocumentText(file).catch(() => '')
+    const localAddress = extractVendorMailingAddressFromText(documentText)
+    let address = localAddress
+    let extractedVendorName = vendorName
+    if (!address || !extractedVendorName) {
+      const extracted = await extractTransactionFromImage(file, activeProject?.name || 'Project', activeProjectId, { knownLots: ['Lot 1', 'Lot 2', 'Lot 3', 'Lot 4'] })
+      address ||= String(extracted.vendorMailingAddress || '').trim()
+      extractedVendorName ||= String(extracted.vendor || '').trim()
     }
+    if (address && extractedVendorName) await handleSaveVendorAddress({ name: extractedVendorName, mailingAddress: address })
+    return address
+  }
+
+  const handleImportVendorAddresses = async () => {
+    const targets = []
+    projectInvoices.forEach((invoice) => (invoice.attachments || []).forEach((attachment) => targets.push({ attachment, vendorName: invoice.vendorName || '' })))
+    activeCostRecords.forEach((cost) => (cost.attachments || []).filter((attachment) => attachment.storagePath).forEach((attachment) => targets.push({ attachment, vendorName: attachment.vendor || '' })))
+    const uniqueTargets = [...new Map(targets.map((target) => [target.attachment.storagePath || target.attachment.id, target])).values()]
+    let imported = 0
+    for (const target of uniqueTargets) {
+      // Sequential analysis avoids overwhelming document storage or the extraction service.
+      // eslint-disable-next-line no-await-in-loop
+      const address = await handleExtractVendorAddress(target.attachment, target.vendorName)
+      if (address) imported += 1
+    }
+    return { imported, reviewed: uniqueTargets.length }
+  }
+
+  const handleCreateCheckFromCost = (draft) => {
+    setPendingCheckDraft({
+      ...draft,
+      date: draft.date || new Date().toLocaleDateString('en-CA'),
+    })
+    setShowCostPage(false)
+    setBreakdownParentCostId(null)
+    setCostPageEditCostId(null)
+    setProjectSection('checks')
+    setWorkspaceView('project')
   }
 
   const handleDownloadCostDocument = async (attachment) => {
@@ -881,6 +1151,45 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       attachmentWindow?.close()
       throw error
     }
+  }
+
+  const handleUploadMiscellaneousDocument = async (file) => {
+    if (!persistenceEnabled) throw new Error('Sign in before uploading a project document')
+    const saved = await uploadMiscellaneousDocument(activeProjectId, file)
+    setMiscellaneousDocuments((current) => [saved, ...current])
+    return saved
+  }
+
+  const handleDeleteMiscellaneousDocument = async (document) => {
+    if (!persistenceEnabled) throw new Error('Sign in before removing a project document')
+    await deleteMiscellaneousDocument(activeProjectId, document)
+    const documentId = document.documentId || document.id
+    setMiscellaneousDocuments((current) => current.filter((entry) => (entry.documentId || entry.id) !== documentId))
+  }
+
+  const handleUpdateMiscellaneousDocument = async (documentId, updates) => {
+    if (!persistenceEnabled) throw new Error('Sign in before updating a project document')
+    const saved = await updateMiscellaneousDocument(activeProjectId, documentId, updates)
+    setMiscellaneousDocuments((current) => current.map((entry) => (
+      (entry.documentId || entry.id) === documentId ? saved : entry
+    )))
+    return saved
+  }
+
+  const handleAnalyzeMiscellaneousDocument = async (document) => {
+    if (!persistenceEnabled) throw new Error('Sign in before analyzing a project document')
+    const signedUrl = await createDocumentSignedUrl(document)
+    const response = await fetch(signedUrl)
+    if (!response.ok) throw new Error('The document could not be opened for analysis')
+    const blob = await response.blob()
+    const originalName = document.originalName || document.name || 'project-document'
+    const file = new File([blob], originalName, { type: document.mimeType || blob.type || 'application/pdf' })
+    const analysis = await analyzeMiscellaneousDocument(file, activeProjectId)
+    return handleUpdateMiscellaneousDocument(document.documentId || document.id, {
+      name: String(analysis.suggestedName || document.name || originalName).trim(),
+      documentDate: String(analysis.documentDate || document.documentDate || '').trim(),
+      description: String(analysis.description || '').trim(),
+    })
   }
 
   const handleSaveConstructionDraft = async (draftId, updates) => {
@@ -929,7 +1238,32 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       const existingIds = new Set(current.map((item) => item.id))
       return [...savedRows.filter((item) => !existingIds.has(item.id)), ...current]
     })
+    return savedRows
   }
+
+  const handleStoreBankStatement = async (file, bank) => {
+    if (!persistenceEnabled) throw new Error('Sign in before storing a bank statement')
+    const saved = await uploadBankStatementDocument(activeProjectId, file, bank)
+    setBankStatementDocuments((current) => [
+      saved,
+      ...current.filter((document) => (document.documentId || document.id) !== (saved.documentId || saved.id)),
+    ])
+    return saved
+  }
+
+  const handleFetchBankConnections = () => fetchBankConnections(activeProjectId)
+
+  const handleCreateBankLinkToken = () => createBankLinkToken(activeProjectId)
+
+  const handleExchangeBankPublicToken = (publicToken, institutionName) => exchangeBankPublicToken(activeProjectId, publicToken, institutionName)
+
+  const handleSyncBankConnection = async (connectionId) => {
+    const result = await syncBankConnection(activeProjectId, connectionId)
+    setBankTransactions(await fetchBankTransactions(activeProjectId))
+    return result
+  }
+
+  const handleDisconnectBankConnection = (connectionId) => disconnectBankConnection(activeProjectId, connectionId)
 
   const handleSaveProjectCheck = async (check) => {
     if (!persistenceEnabled) throw new Error('Sign in before saving a check')
@@ -942,6 +1276,13 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
     if (!persistenceEnabled) throw new Error('Sign in before changing a check')
     const saved = await updateProjectCheckStatus(checkId, status)
     setProjectChecks((current) => current.map((check) => check.id === checkId ? saved : check))
+    return saved
+  }
+
+  const handleProjectCheckUpdate = async (checkId, check) => {
+    if (!persistenceEnabled) throw new Error('Sign in before updating a check')
+    const saved = await updateProjectCheck(checkId, check)
+    setProjectChecks((current) => current.map((entry) => entry.id === checkId ? saved : entry))
     return saved
   }
 
@@ -970,6 +1311,40 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
     if (!persistenceEnabled) throw new Error('Sign in before changing which lot a check is for')
     const saved = await updateProjectCheckLot(checkId, lot)
     setProjectChecks((current) => current.map((check) => check.id === checkId ? saved : check))
+    return saved
+  }
+
+  const handleSaveFinancingTransaction = async (entry) => {
+    if (!persistenceEnabled) throw new Error('Sign in before saving financing activity')
+    const saved = await saveFinancingTransaction(entry)
+    setFinancingTransactions((current) => [saved, ...current])
+    return saved
+  }
+
+  const handleDeleteFinancingTransaction = async (entryId) => {
+    if (!persistenceEnabled) throw new Error('Sign in before removing financing activity')
+    await deleteFinancingTransaction(entryId)
+    setFinancingTransactions((current) => current.filter((entry) => entry.id !== entryId))
+  }
+
+  const handleFinancingStatusChange = async (entryId, status) => {
+    if (!persistenceEnabled) throw new Error('Sign in before updating financing activity')
+    const saved = await updateFinancingTransactionStatus(entryId, status)
+    setFinancingTransactions((current) => current.map((entry) => entry.id === entryId ? saved : entry))
+    return saved
+  }
+
+  const handleUpdateFinancingTransaction = async (entryId, entry) => {
+    if (!persistenceEnabled) throw new Error('Sign in before editing financing activity')
+    const saved = await updateFinancingTransaction(entryId, entry)
+    setFinancingTransactions((current) => current.map((item) => item.id === entryId ? saved : item))
+    return saved
+  }
+
+  const handleFinancingTreatmentChange = async (entryId, treatment, profitOwnerId, notes) => {
+    if (!persistenceEnabled) throw new Error('Sign in before updating financing treatment')
+    const saved = await updateFinancingTransactionTreatment(entryId, treatment, profitOwnerId, notes)
+    setFinancingTransactions((current) => current.map((entry) => entry.id === entryId ? saved : entry))
     return saved
   }
 
@@ -1006,6 +1381,137 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       ...updates,
     } : item))
     await updateBankTransaction(transactionId, updates)
+  }
+
+  const handlePostBankDebitCosts = async (selectedDebits) => {
+    const classificationMap = {
+      soft_cost: {
+        label: 'Soft Cost', parentName: 'Soft Costs', phase: 'development', category: 'Soft costs',
+        mainCategory: 'Soft / Development Costs', subcategory: 'Other Development Costs',
+      },
+      land_cost: {
+        label: 'Land Cost', parentName: 'Land Cost', phase: 'development', category: 'Land cost',
+        mainCategory: 'Land Acquisition', subcategory: 'Other land acquisition expenses',
+      },
+      ground_work: {
+        label: 'Ground Work', parentName: 'Ground Work — Narron', phase: 'development', category: 'Site work',
+        mainCategory: 'Soft / Development Costs', subcategory: 'Clearing / Preliminary Site Work',
+      },
+      land_financing: {
+        label: 'Land Financing', parentName: 'Land Interest & Financing', phase: 'development', category: 'Loan interest',
+        mainCategory: 'Land Interest & Financing', subcategory: 'Other Financing Costs', loanRelated: true,
+      },
+      construction_cost: {
+        label: 'Construction Cost', phase: 'construction', category: 'Other construction costs',
+        mainCategory: 'Construction Costs', subcategory: 'Other Construction Costs',
+      },
+      other_cost: {
+        label: 'Other Project Cost', phase: 'development', category: 'Other',
+        mainCategory: 'Other Costs', subcategory: 'Other Project Cost',
+      },
+    }
+    const exclusionLabels = {
+      internal_transfer: 'Internal Transfer / Not a Cost',
+      personal_exclude: 'Personal / Exclude',
+    }
+    const parentAddedAmounts = new Map()
+    let posted = 0
+    let excluded = 0
+    let existing = 0
+
+    const updateReviewedDebit = async (transaction, category, classificationStatus) => {
+      const updates = {
+        category,
+        isOwnerContribution: false,
+        reviewReasons: [],
+        classificationStatus,
+        reviewedAt: new Date().toISOString(),
+      }
+      setBankTransactions((current) => current.map((item) => item.id === transaction.id ? { ...item, ...updates } : item))
+      if (persistenceEnabled) await updateBankTransaction(transaction.id, updates)
+    }
+
+    for (const { transaction, classification } of selectedDebits) {
+      if (exclusionLabels[classification]) {
+        await updateReviewedDebit(transaction, exclusionLabels[classification], 'ledger_excluded')
+        excluded += 1
+        continue
+      }
+
+      const mapping = classificationMap[classification] || classificationMap.other_cost
+      const permanentReference = `BOFA-TXN-${transaction.id}`
+      const linkedCost = accountingCostRecords.find((cost) => cost.referenceNumber === permanentReference)
+      if (linkedCost) {
+        await updateReviewedDebit(transaction, mapping.label, 'ledger_posted')
+        existing += 1
+        continue
+      }
+
+      const parent = mapping.parentName
+        ? accountingCostRecords.find((cost) => !cost.parentCostId && cost.name === mapping.parentName)
+        : null
+      const payerOwner = owners.find((owner) => owner.name === transaction.owner)
+      const companyOwner = owners.find((owner) => /green\s*fort/i.test(owner.name || '')) || owners[0]
+      const ownerId = payerOwner?.id ?? companyOwner?.id
+      if (ownerId == null) throw new Error('Add at least one owner or company record before posting bank debits to the ledger.')
+
+      const bankText = [transaction.description, transaction.memo, transaction.rawDescription]
+        .map((value) => String(value || '').trim()).filter(Boolean)
+      const details = [...new Set(bankText)].join(' · ')
+      const transactionText = bankText.join(' ').toLowerCase()
+      const paymentMethod = /check/.test(String(transaction.transactionType || '').toLowerCase()) ? 'bofa_check'
+        : /checkcard|card|purchase/.test(transactionText) ? 'debit_card' : 'bofa_ach'
+      const amount = Math.abs(Number(transaction.amount || 0))
+
+      await handleCostPageAdd({
+        name: transaction.vendor || transaction.description || 'Bank of America debit',
+        vendorName: transaction.vendor || transaction.description || '',
+        details,
+        amount,
+        invoiceAmount: amount,
+        ownerId,
+        phase: mapping.phase,
+        category: mapping.category,
+        mainCategory: mapping.mainCategory,
+        subcategory: mapping.subcategory,
+        payerType: payerOwner ? 'owner' : 'company',
+        payerOwnerId: payerOwner?.id ?? null,
+        payerName: payerOwner?.name || 'Green Fort LLC',
+        paymentSource: 'Bank of America',
+        paymentMethod,
+        paymentDate: transaction.date,
+        referenceNumber: permanentReference,
+        reimbursable: Boolean(payerOwner),
+        loanRelated: Boolean(mapping.loanRelated),
+        notes: `Posted from ${transaction.sourceName || 'a Bank of America statement'}; source transaction ${transaction.id}.`,
+        lotAllocations: [],
+        date: transaction.date,
+        attachments: [],
+        parentCostId: parent?.costId || null,
+      })
+      if (parent) parentAddedAmounts.set(parent.costId, Number(parentAddedAmounts.get(parent.costId) || 0) + amount)
+      await updateReviewedDebit(transaction, mapping.label, 'ledger_posted')
+      posted += 1
+    }
+
+    for (const [parentCostId, addedAmount] of parentAddedAmounts) {
+      const parent = accountingCostRecords.find((cost) => String(cost.costId) === String(parentCostId))
+      if (!parent) continue
+      const existingBreakdownTotal = accountingCostRecords
+        .filter((cost) => String(cost.parentCostId) === String(parentCostId))
+        .reduce((sum, cost) => sum + Number(cost.amount || 0), 0)
+      const requiredParentTotal = Math.round((existingBreakdownTotal + addedAmount) * 100) / 100
+      if (requiredParentTotal <= Number(parent.amount || 0) + 0.009) continue
+      await handleCostPageEdit({
+        ...parent,
+        costId: parent.costId,
+        amount: requiredParentTotal,
+        invoiceAmount: parent.invoiceAmount == null ? null : requiredParentTotal,
+        lotAllocations: splitExistingLotAllocationsEvenly(requiredParentTotal, parent.lotAllocations),
+      })
+    }
+
+    return { posted, excluded, existing }
   }
 
   const handleOpenProject = (projectId) => {
@@ -1048,34 +1554,45 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
 
   if (showCostPage) {
     return (
-      <CostPage
-        owners={owners}
-        developmentCosts={activeDevelopmentCosts}
-        breakdownCosts={activeBreakdownCosts}
-        costVersions={projectCostVersions}
-        constructionDrafts={constructionDrafts}
-        projectChecks={projectChecks.filter((check) => String(check.projectId) === String(activeProjectId))}
-        lotCommitments={projectLotCommitments}
-        initialParentCostId={breakdownParentCostId}
-        initialEditCostId={costPageEditCostId}
-        onBack={() => {
-          setShowCostPage(false)
-          setBreakdownParentCostId(null)
-          setCostPageEditCostId(null)
-        }}
-        onAddDevelopmentCost={handleCostPageAdd}
-        onEditDevelopmentCost={handleCostPageEdit}
-        onDeleteDevelopmentCost={handleCostPageDelete}
-        onUploadDocument={handleUploadCostDocument}
-        onAttachDocument={handleAttachCostDocument}
-        onOpenDocument={handleOpenCostDocument}
-        onMergeBreakdowns={handleMergeCostBreakdowns}
-        onAddItemsToGroup={handleAddCostsToBreakdownGroup}
-        onUnmergeGroup={handleUnmergeCostBreakdownGroup}
-        onSaveConstructionDraft={handleSaveConstructionDraft}
-        onConvertConstructionDraft={handleConvertConstructionDraft}
-        sharedDevelopmentCostTotal={ownerCostTotal}
-      />
+      <>
+        <CostPage
+          owners={owners}
+          developmentCosts={activeDevelopmentCosts}
+          breakdownCosts={activeBreakdownCosts}
+          costVersions={projectCostVersions}
+          constructionDrafts={constructionDrafts}
+          projectChecks={projectChecks.filter((check) => String(check.projectId) === String(activeProjectId))}
+          lotCommitments={projectLotCommitments}
+          activeProjectId={activeProjectId}
+          projectName={activeProject?.name || 'Project'}
+          initialParentCostId={breakdownParentCostId}
+          initialEditCostId={costPageEditCostId}
+          onBack={() => {
+            setShowCostPage(false)
+            setBreakdownParentCostId(null)
+            setCostPageEditCostId(null)
+          }}
+          onAddDevelopmentCost={handleCostPageAdd}
+          onEditDevelopmentCost={handleCostPageEdit}
+          onDeleteDevelopmentCost={handleCostPageDelete}
+          onUploadDocument={handleUploadCostDocument}
+          onAttachDocument={handleAttachCostDocument}
+          onOpenDocument={handleOpenCostDocument}
+          onCreateCheck={handleCreateCheckFromCost}
+          onMergeBreakdowns={handleMergeCostBreakdowns}
+          onAddItemsToGroup={handleAddCostsToBreakdownGroup}
+          onUnmergeGroup={handleUnmergeCostBreakdownGroup}
+          onSaveConstructionDraft={handleSaveConstructionDraft}
+          onConvertConstructionDraft={handleConvertConstructionDraft}
+          sharedDevelopmentCostTotal={ownerCostTotal}
+        />
+        {overviewPreviewAttachment ? <AttachmentPreviewModal
+          attachment={overviewPreviewAttachment}
+          onClose={() => setOverviewPreviewAttachment(null)}
+          onGetUrl={createDocumentSignedUrl}
+          onDownload={handleDownloadCostDocument}
+        /> : null}
+      </>
     )
   }
 
@@ -1243,11 +1760,15 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
           {[
             ['overview', 'Overview'],
             ['costs', 'Owners & Costs'],
+            ['reports', 'Reports'],
             ['lots', 'Lots'],
             ['jobs', 'Spending by Job'],
-            ['income', 'Income'],
+            ['income', 'Draws & Income'],
+            ['partners', 'Partners'],
+            ['financing', 'Loans & Owner Payouts'],
             ['bank', 'Bank'],
             ['checks', 'Checks'],
+            ['documents', 'Documents'],
             ['audit', 'Tax & Audit'],
             ['review', 'Review'],
             ['access', 'Access'],
@@ -1343,6 +1864,10 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
               </div>
             </div>
             <div className="overview-cost-heading-actions">
+              <div className="overview-view-toggle" role="group" aria-label="Cost display">
+                <button type="button" className={overviewCostView === 'cards' ? 'active' : ''} aria-pressed={overviewCostView === 'cards'} onClick={() => setOverviewCostView('cards')}>Cards</button>
+                <button type="button" className={overviewCostView === 'list' ? 'active' : ''} aria-pressed={overviewCostView === 'list'} onClick={() => setOverviewCostView('list')}>List</button>
+              </div>
               <label>
                 Filter costs by lot
                 <select aria-label="Filter overview costs by lot" value={overviewLotFilter} onChange={(event) => setOverviewLotFilter(event.target.value)}>
@@ -1362,7 +1887,48 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
             <span>{overviewCostMessage.text}</span>
             <button type="button" aria-label="Dismiss cost message" onClick={() => setOverviewCostMessage(null)}>×</button>
           </div> : null}
-          <div className="overview-cost-grid">
+          {overviewCostView === 'list' ? <div className="overview-cost-list" role="table" aria-label="Overview cost list">
+            <div className="overview-cost-list-header" role="row">
+              <span role="columnheader">Date</span>
+              <span role="columnheader">Cost</span>
+              <span role="columnheader">Owner / category</span>
+              <span role="columnheader">Lot</span>
+              <span role="columnheader">Breakdown</span>
+              <span role="columnheader">Amount</span>
+              <span role="columnheader">Actions</span>
+            </div>
+            {overviewFilteredCosts.map((cost) => {
+              const owner = owners.find((entry) => entry.id === cost.ownerId)
+              const breakdowns = activeBreakdownCosts.filter((entry) => entry.parentCostId === cost.costId)
+              const allocated = Math.round(breakdowns.reduce((sum, entry) => sum + Number(entry.amount || 0), 0) * 100) / 100
+              const remaining = Number(cost.amount || 0) - allocated
+              const detailsExpanded = expandedOverviewCostIds.has(cost.costId)
+              const displayedAmount = getCostAmountForLotFilter(cost, overviewLotFilter)
+              const lots = (cost.lotAllocations || []).map((entry) => entry.lot).filter(Boolean)
+              return <Fragment key={cost.id}>
+                <div className={`overview-cost-list-row${remaining < 0 ? ' is-over-allocated' : ''}`} role="row">
+                  <span role="cell">{cost.date || '—'}<small>Added {costAddedDate(cost)}</small></span>
+                  <span role="cell"><strong>{cost.name}</strong><small>{costPhaseLabel(cost.phase)}</small></span>
+                  <span role="cell">{owner?.name || 'Not assigned'}<small>{cost.category || 'Uncategorized'}</small></span>
+                  <span role="cell">{overviewLotFilter !== 'all' ? (overviewLotFilter === 'unassigned' ? 'Unassigned' : overviewLotFilter) : (lots.join(', ') || 'Unassigned')}</span>
+                  <span role="cell"><strong>{breakdowns.length ? `${breakdowns.length} item${breakdowns.length === 1 ? '' : 's'}` : 'Not started'}</strong><small className={remaining < 0 ? 'warning' : ''}>{remaining < 0 ? `Over ${currency.format(Math.abs(remaining))}` : `${currency.format(remaining)} remaining`}</small></span>
+                  <strong role="cell" className="overview-cost-list-amount">{currency.format(displayedAmount)}</strong>
+                  <span role="cell" className="overview-cost-list-actions">
+                    {breakdowns.length ? <button type="button" className="text-button" aria-expanded={detailsExpanded} onClick={() => toggleOverviewCostDetails(cost.costId)}>{detailsExpanded ? 'Hide' : 'Details'}</button> : null}
+                    <button type="button" className="text-button" onClick={() => handleOpenCostEdit(cost.costId)}>Edit</button>
+                    <button type="button" className="text-button" onClick={() => handleOpenCostBreakdown(cost.costId)}>Break down</button>
+                  </span>
+                </div>
+                {detailsExpanded ? <div className="overview-cost-list-details">
+                  {breakdowns.map((breakdown) => <div key={breakdown.id}><span>↳ {breakdown.name}</span><small>{breakdown.date || 'No date'} · {breakdown.category || 'Uncategorized'}</small><strong>{currency.format(breakdown.amount)}</strong></div>)}
+                </div> : null}
+              </Fragment>
+            })}
+            {overviewFilteredCosts.length === 0 ? <div className="cost-empty-state">
+              <strong>{activeDevelopmentCosts.length ? 'No costs match this lot filter' : 'No project costs yet'}</strong>
+              <p>{activeDevelopmentCosts.length ? 'Choose another lot or All lots.' : 'Add the first cost from the Owners & Costs section or open the full cost page.'}</p>
+            </div> : null}
+          </div> : <div className="overview-cost-grid">
             {overviewFilteredCosts.map((cost) => {
               const owner = owners.find((entry) => entry.id === cost.ownerId)
               const breakdowns = activeBreakdownCosts.filter((entry) => entry.parentCostId === cost.costId)
@@ -1375,6 +1941,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
               const attachedChecks = projectChecks.filter((check) => (
                 check.costId === cost.costId
                 && check.status !== 'voided'
+                && check.checkType !== 'internal_transfer'
                 && (overviewLotFilter === 'all' || (overviewLotFilter === 'unassigned' ? !check.lot : check.lot === overviewLotFilter))
               ))
               return <article key={cost.id} className={`dashboard-cost-row overview-cost-card${detailsExpanded ? ' is-expanded' : ''}${isOverAllocated ? ' is-over-allocated' : ''}`}>
@@ -1382,7 +1949,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
                   <div className="overview-cost-title-row">
                     <div>
                       <strong>{cost.name}</strong>
-                      <p>{owner?.name || 'Owner not assigned'} • {costPhaseLabel(cost.phase)} • {cost.category || 'Uncategorized'} • {cost.date}</p>
+                      <p>{owner?.name || 'Owner not assigned'} • {costPhaseLabel(cost.phase)} • {cost.category || 'Uncategorized'} • Invoice {cost.date || 'Not available'} • Added {costAddedDate(cost)}</p>
                       {overviewLotFilter !== 'all' ? <small className="overview-lot-portion">Showing {overviewLotFilter === 'unassigned' ? 'unassigned portion' : `${overviewLotFilter} allocation`} of {currency.format(cost.amount)} total</small> : null}
                     </div>
                     <strong className="overview-cost-amount">{currency.format(displayedAmount)}</strong>
@@ -1459,15 +2026,20 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
               <strong>{activeDevelopmentCosts.length ? 'No costs match this lot filter' : 'No project costs yet'}</strong>
               <p>{activeDevelopmentCosts.length ? 'Choose another lot or All lots.' : 'Add the first cost from the Owners & Costs section or open the full cost page.'}</p>
             </div> : null}
-          </div>
+          </div>}
 
           <div className="overview-section-heading overview-category-heading">
             <div>
               <p className="eyebrow">Budget tracking</p>
-              <h3>Cost categories</h3>
+              <h3>Cost phase budgets</h3>
             </div>
           </div>
           <div className="category-list overview-category-list">
+            {categoryBudgetMessage ? (
+              <p className={categoryBudgetMessage.type === 'error' ? 'validation-error' : 'budget-save-status'} role={categoryBudgetMessage.type === 'error' ? 'alert' : 'status'}>
+                {categoryBudgetMessage.text}
+              </p>
+            ) : null}
             {selectedProjectCategories.length === 0 ? (
               <div className="table-row">
                 <div>
@@ -1477,18 +2049,84 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
               </div>
             ) : null}
             {selectedProjectCategories.map((category) => {
-              const actual = projectTransactions.filter((transaction) => transaction.categoryId === category.id).reduce((sum, item) => sum + item.amount, 0)
+              const actual = Number(phaseCostTotals[category.phase] || 0)
               const variance = category.budgetedAmount - actual
+              const budgetDraft = categoryBudgetDrafts[category.id] ?? String(category.budgetedAmount)
+              const isSaving = savingCategoryBudgetId === category.id
+              if (category.phase === 'construction') {
+                const lotDrafts = categoryLotBudgetDrafts[category.id] || {}
+                const draftTotal = CONSTRUCTION_BUDGET_LOTS.reduce((sum, lot) => (
+                  sum + (Number(lotDrafts[lot] ?? category.lotBudgets?.[lot] ?? 0) || 0)
+                ), 0)
+                return (
+                  <div key={category.id} className="category-row construction-budget-category">
+                    <div className="construction-budget-header">
+                      <div>
+                        <strong>{category.name}</strong>
+                        <p>construction · Actual {currency.format(actual)} · Budget {currency.format(category.budgetedAmount)}</p>
+                      </div>
+                      <div className="metric-stack">
+                        <small className={variance < 0 ? 'warning' : ''}>Total variance {currency.format(variance)}</small>
+                        {constructionLotCostTotals.unassigned > 0 ? <small className="warning">Unassigned actual {currency.format(constructionLotCostTotals.unassigned)}</small> : null}
+                      </div>
+                    </div>
+                    <form className="construction-lot-budget-form" onSubmit={(event) => handleCategoryBudgetSave(event, category)}>
+                      <div className="construction-lot-budget-grid">
+                        {CONSTRUCTION_BUDGET_LOTS.map((lot) => {
+                          const lotActual = Number(constructionLotCostTotals.byLot[lot] || 0)
+                          const lotBudget = Number(category.lotBudgets?.[lot] || 0)
+                          const lotVariance = lotBudget - lotActual
+                          return <label key={lot} className="construction-lot-budget-row">
+                            <span><strong>{lot}</strong><small>Actual {currency.format(lotActual)}</small></span>
+                            <span className="construction-lot-budget-input">
+                              Budget
+                              <input
+                                aria-label={`Construction ${lot} budget`}
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                inputMode="decimal"
+                                value={lotDrafts[lot] ?? String(lotBudget)}
+                                onChange={(event) => setCategoryLotBudgetDrafts((current) => ({
+                                  ...current,
+                                  [category.id]: { ...(current[category.id] || {}), [lot]: event.target.value },
+                                }))}
+                              />
+                            </span>
+                            <small className={lotVariance < 0 ? 'warning' : ''}>Variance {currency.format(lotVariance)}</small>
+                          </label>
+                        })}
+                      </div>
+                      <div className="construction-budget-actions">
+                        <span>Four-lot budget total: <strong>{currency.format(draftTotal)}</strong></span>
+                        <button type="submit" className="secondary-button" disabled={isSaving}>{isSaving ? 'Saving…' : 'Save lot budgets'}</button>
+                      </div>
+                    </form>
+                  </div>
+                )
+              }
               return (
                 <div key={category.id} className="category-row">
                   <div>
                     <strong>{category.name}</strong>
-                    <p>{category.phase}</p>
+                    <p>{category.phase} · Actual {currency.format(actual)}</p>
                   </div>
-                  <div className="metric-stack">
-                    <span>{currency.format(actual)} / {currency.format(category.budgetedAmount)}</span>
+                  <form className="metric-stack category-budget-form" onSubmit={(event) => handleCategoryBudgetSave(event, category)}>
+                    <label>
+                      Budget
+                      <input
+                        aria-label={`${category.name} budget`}
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        inputMode="decimal"
+                        value={budgetDraft}
+                        onChange={(event) => setCategoryBudgetDrafts((current) => ({ ...current, [category.id]: event.target.value }))}
+                      />
+                    </label>
                     <small className={variance < 0 ? 'warning' : ''}>Variance {currency.format(variance)}</small>
-                  </div>
+                    <button type="submit" className="secondary-button" disabled={isSaving}>{isSaving ? 'Saving…' : 'Save budget'}</button>
+                  </form>
                 </div>
               )
             })}
@@ -1515,6 +2153,10 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
               Contribution amount
               <input aria-label="Contribution amount" type="number" min="0" step="0.01" required value={ownerContribution} onChange={(event) => setOwnerContribution(event.target.value)} />
             </label>
+            <label>
+              Ownership percentage
+              <input aria-label="Ownership percentage" type="number" min="0" max="100" step="0.01" required value={ownerOwnershipPercentage} onChange={(event) => setOwnerOwnershipPercentage(event.target.value)} />
+            </label>
             {ownerFormError ? <p className="validation-error" role="alert">{ownerFormError}</p> : null}
             <div className="button-row">
               <button type="submit" className="action-button">{editingOwnerId != null ? 'Save owner changes' : 'Add owner'}</button>
@@ -1534,7 +2176,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
               <div key={owner.id} className="table-row">
                 <div>
                   <strong>{owner.name}</strong>
-                  <p>Separate contribution</p>
+                  <p>{Number(owner.ownershipPercentage ?? 50).toFixed(2)}% ownership · separately tracked contribution</p>
                 </div>
                 <div>{currency.format(Number(owner.contributionAmount || 0))}</div>
                 <button type="button" className="secondary-button" onClick={() => handleStartOwnerEdit(owner)}>Edit owner</button>
@@ -1589,8 +2231,9 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
               <input aria-label="Cost amount" type="number" min="0.01" step="0.01" required value={developmentCostAmount} onChange={(event) => setDevelopmentCostAmount(event.target.value)} />
             </label>
             <label>
-              Cost date
-              <input aria-label="Cost date" type="date" required value={developmentCostDate} onChange={(event) => setDevelopmentCostDate(event.target.value)} />
+              Invoice date
+              <input aria-label="Invoice date" type="date" required value={developmentCostDate} onChange={(event) => setDevelopmentCostDate(event.target.value)} />
+              <small>The added date is recorded automatically.</small>
             </label>
             <label>
               Phase
@@ -1622,7 +2265,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
                 <div key={cost.id} className="table-row">
                   <div>
                     <strong>{cost.name}</strong>
-                    <p>{owner?.name || 'Owner'} • {costPhaseLabel(cost.phase)} • {cost.date}</p>
+                    <p>{owner?.name || 'Owner'} • {costPhaseLabel(cost.phase)} • Invoice {cost.date || 'Not available'} • Added {costAddedDate(cost)}</p>
                     <small>{breakdowns.length} breakdown{breakdowns.length === 1 ? '' : 's'} • Allocated {currency.format(allocated)} • Unallocated {currency.format(Number(cost.amount || 0) - allocated)}</small>
                   </div>
                   <div>{currency.format(cost.amount)}</div>
@@ -1660,7 +2303,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
           <div className="table-card">
             {projectInvoices.map((invoice) => {
               const vendor = vendors.find((entry) => entry.id === invoice.vendorId)
-              const attachedChecks = projectChecks.filter((check) => check.invoiceId === invoice.id && check.status !== 'voided')
+              const attachedChecks = projectChecks.filter((check) => check.invoiceId === invoice.id && check.status !== 'voided' && check.checkType !== 'internal_transfer')
               return (
                 <div key={invoice.id} className="table-row">
                   <div>
@@ -1669,7 +2312,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
                     {attachedChecks.length ? <p className="check-link-summary"><strong>Checks:</strong> {attachedChecks.map((check) => `#${check.checkNumber} (${currency.format(check.amount)})`).join(', ')}</p> : null}
                   </div>
                   <div>{currency.format(invoice.amount)}</div>
-                  <div>{invoice.status}</div>
+                  <div>{invoice.status}<InvoicePaymentWarning invoiceDate={invoice.invoiceDate} paid={invoice.status === 'paid' || attachedChecks.filter((check) => check.status === 'printed').reduce((sum, check) => sum + Number(check.amount || 0), 0) >= Number(invoice.amount)} /></div>
                 </div>
               )
             })}
@@ -1706,7 +2349,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
         activeProjectId={activeProjectId}
         onSaveLotCommitment={handleSaveLotCommitment}
         onUploadDocument={handleUploadCostDocument}
-        onOpenDocument={handleOpenCostDocument}
+        onOpenDocument={handleDownloadCostDocument}
         onGetDocumentUrl={createDocumentSignedUrl}
         sharedDevelopmentCostTotal={ownerCostTotal}
       /> : null}
@@ -1714,19 +2357,56 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       {showProjectSection('jobs') ? <SpendingByJob
         constructionDrafts={constructionDrafts}
         checks={projectChecks.filter((check) => String(check.projectId) === String(activeProjectId))}
-        activeCosts={activeCostRecords}
+        activeCosts={accountingCostRecords}
         sharedDevelopmentCostTotal={ownerCostTotal}
+      /> : null}
+
+      {showProjectSection('reports') ? <DevelopmentCostReport
+        project={activeProject}
+        costs={activeDevelopmentCosts}
+        breakdowns={activeBreakdownCosts}
+        owners={owners}
+        incomes={projectIncomes}
+        onUpdateCostCategory={(cost, category) => handleCostPageEdit({
+          ...accountingCostRecords.find((entry) => String(entry.costId) === String(cost.costId)),
+          costId: cost.costId,
+          category,
+        })}
+        onEditCost={handleOpenCostEdit}
+        onAddBreakdown={handleOpenCostBreakdown}
+        onDeleteCost={handleCostPageDelete}
       /> : null}
 
       {showProjectSection('income') ? <IncomeSection
         incomes={projectIncomes}
         checks={projectChecks.filter((check) => String(check.projectId) === String(activeProjectId))}
         projects={activeProject ? [activeProject] : []}
+        lotCommitments={projectLotCommitments}
         onAddIncome={handleAddIncome}
         onEditIncome={handleEditIncome}
         onDeleteIncome={handleDeleteIncome}
         onUploadDocument={handleUploadCostDocument}
         onOpenDocument={handleOpenCostDocument}
+      /> : null}
+
+      {showProjectSection('financing') && activeProject ? <FinancingLedger
+        project={activeProject}
+        owners={owners}
+        entries={financingTransactions}
+        onSave={handleSaveFinancingTransaction}
+        onDelete={handleDeleteFinancingTransaction}
+        onStatusChange={handleFinancingStatusChange}
+        onUpdate={handleUpdateFinancingTransaction}
+        onTreatmentChange={handleFinancingTreatmentChange}
+        onPrepareCheck={handleCreateCheckFromCost}
+      /> : null}
+
+      {showProjectSection('partners') && activeProject ? <PartnersSection
+        project={activeProject}
+        owners={owners}
+        entries={financingTransactions}
+        onSave={handleSaveFinancingTransaction}
+        onDelete={handleDeleteFinancingTransaction}
       /> : null}
 
       {overviewPreviewAttachment ? <AttachmentPreviewModal
@@ -1737,24 +2417,65 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       /> : null}
 
       {showProjectSection('bank') ? <BankDashboard
+        projectId={activeProjectId}
         transactions={bankTransactions}
+        statements={bankStatementDocuments}
         onImport={handleBankImport}
+        onStoreStatement={handleStoreBankStatement}
+        onOpenStatement={handleOpenCostDocument}
+        onDownloadStatement={handleDownloadCostDocument}
         onChangeOwner={handleBankOwnerChange}
         onApproveCategory={handleBankCategoryApproval}
+        ledgerCosts={accountingCostRecords}
+        onPostDebitCosts={handlePostBankDebitCosts}
+        canConnect={persistenceEnabled}
+        onFetchConnections={handleFetchBankConnections}
+        onCreateLinkToken={handleCreateBankLinkToken}
+        onExchangePublicToken={handleExchangeBankPublicToken}
+        onLoadPlaidLink={loadPlaidLink}
+        onSyncConnection={handleSyncBankConnection}
+        onDisconnectConnection={handleDisconnectBankConnection}
       /> : null}
 
       {showProjectSection('checks') && activeProject ? <CheckPrinting
         project={activeProject}
         checks={projectChecks.filter((check) => String(check.projectId) === String(activeProjectId))}
         invoices={projectInvoices}
-        costs={activeCostRecords}
+        costs={accountingCostRecords}
         loanDraws={projectIncomes.filter((income) => income.type === 'loan_draw')}
+        initialDraft={pendingCheckDraft}
+        onInitialDraftApplied={() => setPendingCheckDraft(null)}
         onSaveCheck={handleSaveProjectCheck}
+        onUpdateCheck={handleProjectCheckUpdate}
         onUpdateStatus={handleProjectCheckStatus}
         onUpdateLink={handleProjectCheckLink}
         onUpdateTemplate={handleProjectCheckTemplate}
         onUpdateFunding={handleProjectCheckFunding}
         onUpdateLot={handleProjectCheckLot}
+        onOpenDocument={handleOpenCostDocument}
+        onPrintPaidInvoice={handlePrintPaidInvoice}
+        onExtractVendorAddress={handleExtractVendorAddress}
+        onSaveVendorAddress={handleSaveVendorAddress}
+        onImportVendorAddresses={handleImportVendorAddresses}
+        vendorAddresses={vendors.filter((vendor) => vendor.mailingAddress)}
+      /> : null}
+
+      {paidInvoicePreview ? <AttachmentPreviewModal
+        attachment={paidInvoicePreview.attachment}
+        paidWatermark={paidInvoicePreview.details}
+        onClose={() => setPaidInvoicePreview(null)}
+        onGetUrl={createDocumentSignedUrl}
+        onDownload={handleDownloadCostDocument}
+      /> : null}
+
+      {showProjectSection('documents') ? <ProjectDocuments
+        documents={miscellaneousDocuments}
+        onUpload={handleUploadMiscellaneousDocument}
+        onOpen={handleOpenCostDocument}
+        onDownload={handleDownloadCostDocument}
+        onDelete={handleDeleteMiscellaneousDocument}
+        onUpdate={handleUpdateMiscellaneousDocument}
+        onAnalyze={handleAnalyzeMiscellaneousDocument}
       /> : null}
 
       {showProjectSection('audit') ? <TaxAudit

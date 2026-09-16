@@ -1,11 +1,5 @@
 import { useMemo, useState } from 'react'
-
-const currency = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 2,
-})
+import { currency } from './lib/currency'
 
 function ClassificationPage({ owners, categories, reviewItems, onApproveReviewItem, onRemoveReviewItem, onBack }) {
   const [selectedOwnerId, setSelectedOwnerId] = useState(() => {

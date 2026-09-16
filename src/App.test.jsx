@@ -1,11 +1,21 @@
 import '@testing-library/jest-dom/vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import App, { getCostAmountForLotFilter, getPhaseTotalsForLotFilter } from './App'
+import App, { getConstructionLotCostTotals, getCostAmountForLotFilter, getPhaseTotalsForLotFilter, getTopLevelPhaseCostTotals, splitExistingLotAllocationsEvenly } from './App'
 import ClassificationPage from './ClassificationPage'
 import { extractTransactionFromImage } from './lib/gemini'
 
 describe('App', () => {
+  it('rebalances an increased parent total evenly across its existing lots', () => {
+    expect(splitExistingLotAllocationsEvenly(424238, [
+      { lot: 'Lot 1', amount: 105695 }, { lot: 'Lot 2', amount: 105695 },
+      { lot: 'Lot 3', amount: 105695 }, { lot: 'Lot 4', amount: 105695 },
+    ])).toEqual([
+      { lot: 'Lot 1', amount: 106059.5 }, { lot: 'Lot 2', amount: 106059.5 },
+      { lot: 'Lot 3', amount: 106059.5 }, { lot: 'Lot 4', amount: 106059.5 },
+    ])
+  })
+
   it('returns only the selected lot portion of a shared cost', () => {
     const cost = { amount: 42954, lotAllocations: [{ lot: 'Lot 1', amount: 10501 }, { lot: 'Lot 2', amount: 10966 }, { lot: 'Lot 3', amount: 10872 }, { lot: 'Lot 4', amount: 10615 }] }
     expect(getCostAmountForLotFilter(cost, 'Lot 1')).toBe(10501)
@@ -16,6 +26,27 @@ describe('App', () => {
       { ...cost, phase: 'development' },
       { amount: 4000, phase: 'construction', lotAllocations: [{ lot: 'Lot 1', amount: 1000 }] },
     ], 'Lot 1')).toEqual({ development: 10501, construction: 1000 })
+  })
+
+  it('builds budget actuals from top-level costs by phase without double-counting breakdowns', () => {
+    expect(getTopLevelPhaseCostTotals([
+      { costId: 'development-parent', phase: 'development', amount: 100000, parentCostId: null },
+      { costId: 'engineering-breakdown', phase: 'development', amount: 25000, parentCostId: 'development-parent' },
+      { costId: 'foundation', phase: 'construction', amount: 75000, parentCostId: null },
+      { costId: 'closing', phase: 'soft_cost', amount: 10000, parentCostId: null },
+    ])).toEqual({ development: 100000, construction: 75000, soft_cost: 10000 })
+  })
+
+  it('builds separate construction actuals for all four lots and keeps unassigned costs visible', () => {
+    expect(getConstructionLotCostTotals([
+      { costId: 'permit', phase: 'construction', amount: 40000, parentCostId: null, lotAllocations: [{ lot: 'Lot 1', amount: 10000 }, { lot: 'Lot 2', amount: 12000 }, { lot: 'Lot 3', amount: 8000 }, { lot: 'Lot 4', amount: 10000 }] },
+      { costId: 'foundation', phase: 'construction', amount: 25000, parentCostId: null, lotAllocations: [{ lot: 'Lot 3', amount: 20000 }] },
+      { costId: 'foundation-detail', phase: 'construction', amount: 5000, parentCostId: 'foundation', lotAllocations: [{ lot: 'Lot 3', amount: 5000 }] },
+      { costId: 'land', phase: 'development', amount: 100000, parentCostId: null, lotAllocations: [{ lot: 'Lot 1', amount: 25000 }] },
+    ])).toEqual({
+      byLot: { 'Lot 1': 10000, 'Lot 2': 12000, 'Lot 3': 28000, 'Lot 4': 10000 },
+      unassigned: 5000,
+    })
   })
   it('hides only the add-cost form while keeping saved costs visible', () => {
     render(<App />)
@@ -78,7 +109,7 @@ describe('App', () => {
     fireEvent.change(screen.getByLabelText(/^cost amount$/i), {
       target: { value: '1250' },
     })
-    fireEvent.change(screen.getByLabelText(/^cost date$/i), {
+    fireEvent.change(screen.getByLabelText(/^invoice date$/i), {
       target: { value: '2026-07-13' },
     })
     fireEvent.click(screen.getByRole('button', { name: /^add cost$/i }))
@@ -97,7 +128,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /add owner/i }))
     fireEvent.change(screen.getByLabelText(/^cost name$/i), { target: { value: 'All Development Cost' } })
     fireEvent.change(screen.getByLabelText(/^cost amount$/i), { target: { value: '372854' } })
-    fireEvent.change(screen.getByLabelText(/^cost date$/i), { target: { value: '2026-07-14' } })
+    fireEvent.change(screen.getByLabelText(/^invoice date$/i), { target: { value: '2026-07-14' } })
     fireEvent.click(screen.getByRole('button', { name: /^add cost$/i }))
 
     const overviewPanel = screen.getByRole('heading', { name: 'Overview' }).closest('.panel')
@@ -105,6 +136,21 @@ describe('App', () => {
 
     expect(screen.getByRole('heading', { name: /new breakdown for all development cost/i })).toBeInTheDocument()
     expect(screen.getByLabelText('Parent cost').value).not.toBe('')
+  })
+
+  it('lets users switch overview costs between card and list views', () => {
+    render(<App />)
+
+    const overview = screen.getByRole('heading', { name: 'Overview' }).closest('.panel')
+    const cardsButton = within(overview).getByRole('button', { name: 'Cards' })
+    const listButton = within(overview).getByRole('button', { name: 'List' })
+    expect(cardsButton).toHaveAttribute('aria-pressed', 'true')
+    expect(overview.querySelector('.overview-cost-grid')).not.toHaveClass('is-list')
+    fireEvent.click(listButton)
+    expect(listButton).toHaveAttribute('aria-pressed', 'true')
+    expect(within(overview).getByRole('table', { name: 'Overview cost list' })).toBeInTheDocument()
+    expect(within(overview).getByRole('columnheader', { name: 'Cost' })).toBeInTheDocument()
+    expect(within(overview).getByRole('columnheader', { name: 'Amount' })).toBeInTheDocument()
   })
 
   it('shows owner, allocation, and expandable breakdown details on the overview', async () => {
@@ -115,40 +161,40 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /add owner/i }))
     fireEvent.change(screen.getByLabelText(/^cost name$/i), { target: { value: 'All Development Cost' } })
     fireEvent.change(screen.getByLabelText(/^cost amount$/i), { target: { value: '100000' } })
-    fireEvent.change(screen.getByLabelText(/^cost date$/i), { target: { value: '2026-07-14' } })
+    fireEvent.change(screen.getByLabelText(/^invoice date$/i), { target: { value: '2026-07-14' } })
     fireEvent.click(screen.getByRole('button', { name: /^add cost$/i }))
 
     let overview = screen.getByRole('heading', { name: 'Overview' }).closest('.panel')
     let costRow = within(overview).getByText('All Development Cost').closest('.dashboard-cost-row')
     expect(costRow).toHaveTextContent('Banu U')
     expect(costRow).toHaveTextContent('No breakdowns yet')
-    expect(costRow).toHaveTextContent('Allocated $0')
-    expect(costRow).toHaveTextContent('Remaining $100,000')
+    expect(costRow).toHaveTextContent('Allocated $0.00')
+    expect(costRow).toHaveTextContent('Remaining $100,000.00')
     fireEvent.click(within(costRow).getByRole('button', { name: 'Add breakdown' }))
 
     fireEvent.change(screen.getByLabelText(/^cost name$/i), { target: { value: 'Engineering plan' } })
     fireEvent.change(screen.getByLabelText(/^cost amount$/i), { target: { value: '105000' } })
     fireEvent.click(screen.getByRole('button', { name: /^add breakdown$/i }))
-    await waitFor(() => expect(screen.getByRole('button', { name: /^add cost$/i })).toBeInTheDocument())
+    await waitFor(() => expect(document.getElementById('cost-editor-form')).toHaveAttribute('hidden'))
     fireEvent.click(screen.getByRole('button', { name: 'Back to dashboard' }))
 
     overview = screen.getByRole('heading', { name: 'Overview' }).closest('.panel')
     costRow = within(overview).getByText('All Development Cost').closest('.dashboard-cost-row')
     expect(costRow).toHaveTextContent('1 breakdown')
-    expect(costRow).toHaveTextContent('Allocated $105,000')
-    expect(costRow).toHaveTextContent('Over allocated $5,000')
+    expect(costRow).toHaveTextContent('Allocated $105,000.00')
+    expect(costRow).toHaveTextContent('Over allocated $5,000.00')
     fireEvent.click(within(costRow).getByRole('button', { name: 'Show details (1)' }))
     const details = overview.querySelector('.dashboard-cost-breakdowns')
     expect(within(details).getByText(/Engineering plan/)).toBeInTheDocument()
-    expect(within(details).getByText('$105,000')).toBeInTheDocument()
+    expect(within(details).getByText('$105,000.00')).toBeInTheDocument()
 
-    expect(costRow).toHaveTextContent('$100,000 + $5,000 = $105,000 breakdown total')
+    expect(costRow).toHaveTextContent('$100,000.00 + $5,000.00 = $105,000.00 breakdown total')
     fireEvent.click(within(costRow).getByRole('button', { name: 'Increase parent to breakdown total' }))
-    fireEvent.click(within(costRow).getByRole('button', { name: 'Confirm increase to $105,000' }))
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('now matches its breakdown total of $105,000'))
+    fireEvent.click(within(costRow).getByRole('button', { name: 'Confirm increase to $105,000.00' }))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('now matches its breakdown total of $105,000.00'))
     costRow = within(overview).getByText('All Development Cost').closest('.dashboard-cost-row')
-    expect(costRow.querySelector('.overview-cost-amount')).toHaveTextContent('$105,000')
-    expect(costRow).toHaveTextContent('Remaining $0')
+    expect(costRow.querySelector('.overview-cost-amount')).toHaveTextContent('$105,000.00')
+    expect(costRow).toHaveTextContent('Remaining $0.00')
     expect(costRow).not.toHaveTextContent('Over allocated')
   })
 
@@ -160,29 +206,30 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /add owner/i }))
     fireEvent.change(screen.getByLabelText(/^cost name$/i), { target: { value: 'Land Acquisition' } })
     fireEvent.change(screen.getByLabelText(/^cost amount$/i), { target: { value: '320000' } })
-    fireEvent.change(screen.getByLabelText(/^cost date$/i), { target: { value: '2025-01-15' } })
+    fireEvent.change(screen.getByLabelText(/^invoice date$/i), { target: { value: '2025-01-15' } })
     fireEvent.click(screen.getByRole('button', { name: /^add cost$/i }))
 
     fireEvent.click(screen.getByRole('button', { name: /open cost page/i }))
     const activeCostSection = screen.getByRole('heading', { name: /all tracked costs/i }).closest('section')
-    const originalRow = within(activeCostSection).getByText('Land Acquisition').closest('.table-row')
+    const originalRow = [...activeCostSection.querySelectorAll('.cost-record-title')].find((node) => node.textContent === 'Land Acquisition')?.closest('.cost-record-card')
 
     fireEvent.click(within(originalRow).getByRole('button', { name: /^edit cost$/i }))
-    expect(screen.getByLabelText(/^cost date$/i)).toHaveValue('2025-01-15')
+    expect(screen.getByLabelText(/^invoice date$/i)).toHaveValue('2025-01-15')
     fireEvent.change(screen.getByLabelText(/^cost amount$/i), { target: { value: '300000' } })
-    fireEvent.change(screen.getByLabelText(/^cost date$/i), { target: { value: '2025-01-20' } })
+    fireEvent.change(screen.getByLabelText(/^invoice date$/i), { target: { value: '2025-01-20' } })
     fireEvent.click(screen.getByRole('button', { name: /save new version/i }))
 
     expect(screen.queryByText(/Land Acquisition · v2/i)).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /show version history/i }))
     expect(screen.getByText(/Land Acquisition · v2/i)).toBeInTheDocument()
-    const updatedRow = within(activeCostSection).getByText('Land Acquisition').closest('.table-row')
-    fireEvent.click(within(updatedRow).getByRole('button', { name: /^delete cost$/i }))
+    const updatedRow = [...activeCostSection.querySelectorAll('.cost-record-title')].find((node) => node.textContent === 'Land Acquisition')?.closest('.cost-record-card')
+    fireEvent.click(within(updatedRow).getByLabelText('More actions for Land Acquisition'))
+    fireEvent.click(within(updatedRow).getByRole('menuitem', { name: /^delete cost$/i }))
 
-    expect(within(activeCostSection).getByText('Land Acquisition')).toBeInTheDocument()
-    fireEvent.click(within(updatedRow).getByRole('button', { name: /confirm delete/i }))
+    expect(activeCostSection.querySelector('.cost-record-title')).toHaveTextContent('Land Acquisition')
+    fireEvent.click(within(updatedRow).getByRole('menuitem', { name: /confirm delete/i }))
 
-    expect(within(activeCostSection).queryByText('Land Acquisition')).not.toBeInTheDocument()
+    expect(activeCostSection.querySelector('.cost-record-title')).not.toBeInTheDocument()
     expect(screen.getByText(/Deleted \d{4}-\d{2}-\d{2}/i)).toBeInTheDocument()
   })
 
@@ -263,7 +310,7 @@ describe('App', () => {
     expect(screen.queryByLabelText(/income project/i)).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Downtown Project/i }))
     expect(screen.queryByLabelText(/income project/i)).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /^Income$/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Draws & Income/i }))
     expect(screen.getByLabelText(/income project/i).value).toMatch(/^\d+$/)
     fireEvent.click(screen.getByRole('button', { name: /back to projects/i }))
     expect(screen.queryByLabelText(/income project/i)).not.toBeInTheDocument()

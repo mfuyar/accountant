@@ -20,21 +20,73 @@ export async function fetchProjectData() {
   }
 
   try {
-    const [{ data: projects, error: projectsError }, { data: owners, error: ownersError }, { data: activeCosts, error: costsError }] = await Promise.all([
+    const [{ data: projects, error: projectsError }, { data: owners, error: ownersError }, { data: activeCosts, error: costsError }, { data: vendors, error: vendorsError }] = await Promise.all([
       supabase.from('projects').select('*').order('created_at', { ascending: true }),
       supabase.from('owners').select('*').order('created_at', { ascending: true }),
-      supabase.from('active_costs').select('project_id,parent_cost_id,amount'),
+      supabase.from('active_costs').select('project_id,parent_cost_id,name,phase,amount'),
+      supabase.from('vendors').select('*').order('name'),
     ])
 
-    if (projectsError || ownersError || costsError) {
-      throw new Error(projectsError?.message || ownersError?.message || costsError?.message || 'Failed to load data')
+    if (projectsError || ownersError || costsError || vendorsError) {
+      throw new Error(projectsError?.message || ownersError?.message || costsError?.message || vendorsError?.message || 'Failed to load data')
     }
 
     const projectCostTotals = buildProjectCostTotals(activeCosts)
-    return { projects: projects ?? [], owners: owners ?? [], projectCostTotals }
+    return { projects: projects ?? [], owners: owners ?? [], vendors: (vendors ?? []).map(normalizeVendor), projectCostTotals }
   } catch {
     return null
   }
+}
+
+const vendorAddressMarker = /\[\[greenfort-vendor-mailing-address:([^\]]+)\]\]/
+const normalizeVendorName = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLowerCase()
+const addressFromVendorNotes = (notes) => {
+  const encoded = String(notes || '').match(vendorAddressMarker)?.[1]
+  if (!encoded) return ''
+  try { return decodeURIComponent(encoded) } catch { return '' }
+}
+const notesWithVendorAddress = (notes, address) => {
+  const clean = String(notes || '').replace(vendorAddressMarker, '').trim()
+  return [clean, `[[greenfort-vendor-mailing-address:${encodeURIComponent(address)}]]`].filter(Boolean).join('\n')
+}
+const normalizeVendor = (row) => ({
+  id: row.id,
+  companyId: row.company_id,
+  name: row.name,
+  trade: row.trade || '',
+  contactEmail: row.contact_email || '',
+  contactPhone: row.contact_phone || '',
+  mailingAddress: row.mailing_address || addressFromVendorNotes(row.notes),
+  notes: String(row.notes || '').replace(vendorAddressMarker, '').trim(),
+})
+
+export async function saveVendorAddress(projectId, { name, mailingAddress }) {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const vendorName = String(name || '').trim().replace(/\s+/g, ' ')
+  const address = String(mailingAddress || '').trim()
+  if (!vendorName || !address) throw new Error('Vendor name and mailing address are required')
+
+  const { data: project, error: projectError } = await supabase.from('projects').select('company_id').eq('id', projectId).single()
+  if (projectError) throw projectError
+  const { data: existingRows, error: vendorError } = await supabase.from('vendors').select('*').eq('company_id', project.company_id)
+  if (vendorError) throw vendorError
+  const existing = (existingRows || []).find((row) => normalizeVendorName(row.name) === normalizeVendorName(vendorName))
+
+  if (existing) {
+    let result = await supabase.from('vendors').update({ mailing_address: address, updated_at: new Date().toISOString() }).eq('id', existing.id).select('*').single()
+    if (result.error?.code === 'PGRST204' || /mailing_address|updated_at/i.test(result.error?.message || '')) {
+      result = await supabase.from('vendors').update({ notes: notesWithVendorAddress(existing.notes, address) }).eq('id', existing.id).select('*').single()
+    }
+    if (result.error) throw result.error
+    return normalizeVendor(result.data)
+  }
+
+  let result = await supabase.from('vendors').insert({ company_id: project.company_id, name: vendorName, mailing_address: address }).select('*').single()
+  if (result.error?.code === 'PGRST204' || /mailing_address/i.test(result.error?.message || '')) {
+    result = await supabase.from('vendors').insert({ company_id: project.company_id, name: vendorName, notes: notesWithVendorAddress('', address) }).select('*').single()
+  }
+  if (result.error) throw result.error
+  return normalizeVendor(result.data)
 }
 
 const normalizeCategory = (row) => ({
@@ -43,6 +95,24 @@ const normalizeCategory = (row) => ({
   phase: row.phase,
   name: row.name,
   budgetedAmount: Number(row.budgeted_amount || 0),
+  lotBudgets: row.lot_budgets && typeof row.lot_budgets === 'object' && !Array.isArray(row.lot_budgets) ? row.lot_budgets : {},
+})
+
+const normalizeStoredDocument = (row) => ({
+  documentId: row.id,
+  id: row.id,
+  storageBucket: row.storage_bucket,
+  storagePath: row.storage_path,
+  name: row.display_name || row.original_name,
+  originalName: row.original_name,
+  documentDate: row.document_date || '',
+  description: row.description || '',
+  mimeType: row.mime_type,
+  size: row.size_bytes,
+  ...(String(row.storage_path || '').match(/\/bank-statements\/(boa|providence|amex|flagstar)\//)?.[1]
+    ? { bank: String(row.storage_path).match(/\/bank-statements\/(boa|providence|amex|flagstar)\//)[1] }
+    : {}),
+  ...(row.created_at ? { createdAt: row.created_at } : {}),
 })
 
 const normalizeInvoice = (row) => ({
@@ -62,6 +132,7 @@ const normalizeInvoice = (row) => ({
   classification: row.classification || '',
   sourceName: row.source_name || '',
   notes: row.notes || '',
+  attachments: Array.isArray(row.documents) ? row.documents.map(normalizeStoredDocument) : [],
 })
 
 const normalizeTransaction = (row) => ({
@@ -80,6 +151,14 @@ const getLegacyCostDimensions = (row) => (Array.isArray(row.attachments)
   ? row.attachments.find((attachment) => attachment?._type === 'cost_dimensions')
   : null)
 
+const getLegacyCostDetails = (row) => (Array.isArray(row.attachments)
+  ? row.attachments.find((attachment) => attachment?._type === 'cost_details')
+  : null)
+
+const getLegacyCostAccounting = (row) => (Array.isArray(row.attachments)
+  ? row.attachments.find((attachment) => attachment?._type === 'cost_accounting')
+  : null)
+
 const normalizeCostVersion = (row) => ({
   id: row.id,
   costId: row.cost_id,
@@ -88,27 +167,57 @@ const normalizeCostVersion = (row) => ({
   ownerId: row.owner_id,
   version: row.version,
   name: row.name,
+  details: row.details || getLegacyCostDetails(row)?.details || '',
+  constructionDraftId: row.construction_draft_id || getLegacyCostAccounting(row)?.constructionDraftId || null,
+  paymentMethod: row.payment_method || getLegacyCostAccounting(row)?.paymentMethod || '',
+  paymentFeePercentage: row.payment_fee_percentage == null ? (getLegacyCostAccounting(row)?.paymentFeePercentage ?? null) : Number(row.payment_fee_percentage),
+  paymentFeeAmount: row.payment_fee_amount == null ? (getLegacyCostAccounting(row)?.paymentFeeAmount ?? null) : Number(row.payment_fee_amount),
+  paymentDate: row.payment_date || getLegacyCostAccounting(row)?.paymentDate || '',
+  invoiceAmount: row.invoice_amount == null ? (getLegacyCostAccounting(row)?.invoiceAmount ?? null) : Number(row.invoice_amount),
   amount: Number(row.amount || 0),
   phase: row.phase,
   category: row.category || getLegacyCostDimensions(row)?.category || '',
+  vendorName: row.vendor_name || getLegacyCostAccounting(row)?.vendorName || '',
+  mainCategory: row.main_category || getLegacyCostAccounting(row)?.mainCategory || '',
+  subcategory: row.subcategory || getLegacyCostAccounting(row)?.subcategory || '',
+  payerType: row.payer_type || getLegacyCostAccounting(row)?.payerType || '',
+  payerOwnerId: row.payer_owner_id || getLegacyCostAccounting(row)?.payerOwnerId || null,
+  payerName: row.payer_name || getLegacyCostAccounting(row)?.payerName || '',
+  paymentSource: row.payment_source || getLegacyCostAccounting(row)?.paymentSource || '',
+  referenceNumber: row.reference_number || getLegacyCostAccounting(row)?.referenceNumber || '',
+  reimbursable: row.reimbursable ?? getLegacyCostAccounting(row)?.reimbursable ?? false,
+  loanRelated: row.loan_related ?? getLegacyCostAccounting(row)?.loanRelated ?? false,
+  notes: row.notes || getLegacyCostAccounting(row)?.notes || '',
+  recurringFrequency: row.recurring_frequency || getLegacyCostAccounting(row)?.recurringFrequency || '',
+  isSoftCostParent: row.is_soft_cost_parent ?? getLegacyCostAccounting(row)?.isSoftCostParent ?? false,
   lotAllocations: Array.isArray(row.lot_allocations) && row.lot_allocations.length ? row.lot_allocations : (getLegacyCostDimensions(row)?.lotAllocations || []),
   date: row.cost_date,
-  attachments: Array.isArray(row.attachments) ? row.attachments.filter((attachment) => attachment?._type !== 'cost_dimensions') : [],
+  attachments: Array.isArray(row.attachments) ? row.attachments.filter((attachment) => !['cost_dimensions', 'cost_details', 'cost_accounting'].includes(attachment?._type)) : [],
   deletedAt: row.deleted_at,
   createdAt: row.created_at,
 })
 
-const normalizeIncome = (row) => ({
-  id: row.id,
-  projectId: row.project_id,
-  description: row.description,
-  source: row.source,
-  amount: Number(row.amount || 0),
-  date: row.income_date,
-  type: row.income_type,
-  lotBreakdown: Array.isArray(row.lot_breakdown) ? row.lot_breakdown : [],
-  attachments: Array.isArray(row.attachments) ? row.attachments : [],
-})
+const normalizeIncome = (row) => {
+  const rawAttachments = Array.isArray(row.attachments) ? row.attachments : []
+  const legacyActivities = rawAttachments
+    .filter((attachment) => attachment?._type === 'income_activity' && attachment.activity)
+    .map((attachment) => attachment.activity)
+  const isLegacyPreSaleDeposit = row.income_type === 'project_income'
+    && /pre[\s-]*sale\s*deposits?/i.test(row.description || '')
+    && /utilized/i.test(row.description || '')
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    description: row.description,
+    source: row.source,
+    amount: Number(row.amount || 0),
+    date: row.income_date,
+    type: isLegacyPreSaleDeposit ? 'pre_sale_deposit' : row.income_type,
+    lotBreakdown: Array.isArray(row.lot_breakdown) ? row.lot_breakdown : [],
+    activities: Array.isArray(row.activity_breakdown) && row.activity_breakdown.length ? row.activity_breakdown : legacyActivities,
+    attachments: rawAttachments.filter((attachment) => attachment?._type !== 'income_activity'),
+  }
+}
 
 const normalizeReviewItem = (row) => ({
   id: row.id,
@@ -143,14 +252,56 @@ const normalizeConstructionDraft = (row) => ({
   updatedAt: row.updated_at,
 })
 
-const normalizeProjectCheck = (row) => ({
+const CHECK_MAILING_ADDRESS_MARKER = /\n?\[\[greenfort-mailing-address:([^\]]*)\]\]/
+const CHECK_TYPE_MARKER = /\n?\[\[greenfort-check-type:([a-z_]+)\]\]/
+const CHECK_DESTINATION_MARKER = /\n?\[\[greenfort-transfer-destination:([^\]]*)\]\]/
+
+const unpackCheckMemo = (value) => {
+  const storedMemo = String(value || '')
+  const addressMatch = storedMemo.match(CHECK_MAILING_ADDRESS_MARKER)
+  const typeMatch = storedMemo.match(CHECK_TYPE_MARKER)
+  const destinationMatch = storedMemo.match(CHECK_DESTINATION_MARKER)
+  const memo = storedMemo
+    .replace(CHECK_MAILING_ADDRESS_MARKER, '')
+    .replace(CHECK_TYPE_MARKER, '')
+    .replace(CHECK_DESTINATION_MARKER, '')
+    .trim()
+  try {
+    return {
+      memo,
+      mailingAddress: addressMatch ? decodeURIComponent(addressMatch[1]) : '',
+      checkType: typeMatch?.[1] || 'payment',
+      destinationAccount: destinationMatch ? decodeURIComponent(destinationMatch[1]) : '',
+    }
+  } catch {
+    return { memo, mailingAddress: '', checkType: typeMatch?.[1] || 'payment', destinationAccount: '' }
+  }
+}
+
+const packLegacyCheckMemo = (memo, mailingAddress, checkType = 'payment', destinationAccount = '') => [
+  String(memo || ''),
+  mailingAddress ? `[[greenfort-mailing-address:${encodeURIComponent(mailingAddress)}]]` : '',
+  checkType !== 'payment' ? `[[greenfort-check-type:${checkType}]]` : '',
+  destinationAccount ? `[[greenfort-transfer-destination:${encodeURIComponent(destinationAccount)}]]` : '',
+].filter(Boolean).join('\n')
+
+const missingCheckMetadataColumn = (error) => (
+  error?.code === 'PGRST204' && /'(mailing_address|check_type|destination_account)'/.test(String(error?.message || ''))
+)
+
+const normalizeProjectCheck = (row) => {
+  const memoMetadata = unpackCheckMemo(row.memo)
+  return ({
   id: row.id,
   projectId: row.project_id,
   checkNumber: row.check_number,
   payee: row.payee,
   amount: Number(row.amount || 0),
   date: row.check_date,
-  memo: row.memo || '',
+  memo: memoMetadata.memo,
+  mailingAddress: row.mailing_address || memoMetadata.mailingAddress,
+  checkType: row.check_type || memoMetadata.checkType || 'payment',
+  destinationAccount: row.destination_account || memoMetadata.destinationAccount || '',
   accountLabel: row.account_label || '',
   templateKey: row.template_key || 'bofa',
   status: row.status,
@@ -161,7 +312,8 @@ const normalizeProjectCheck = (row) => ({
   costId: row.cost_id,
   lot: row.lot || '',
   createdAt: row.created_at,
-})
+  })
+}
 
 const normalizeLotCommitment = (row) => ({
   id: row.id,
@@ -173,45 +325,199 @@ const normalizeLotCommitment = (row) => ({
   attachments: Array.isArray(row.attachments) ? row.attachments : [],
 })
 
-export const buildProjectWorkspace = ({ categoriesResult, invoicesResult, transactionsResult, costsResult, incomesResult, reviewResult, draftsResult, checksResult, lotCommitmentsResult }) => {
+const unpackFinancingNotes = (value = '') => {
+  const notes = String(value)
+  const treatment = notes.match(/\n?\[\[greenfort-financing-treatment:(project_cost|partner_profit)\]\]/)?.[1] || ''
+  const profitOwnerId = notes.match(/\n?\[\[greenfort-profit-owner:(\d+)\]\]/)?.[1] || null
+  return {
+    notes: notes
+      .replace(/\n?\[\[greenfort-financing-treatment:(?:project_cost|partner_profit)\]\]/g, '')
+      .replace(/\n?\[\[greenfort-profit-owner:\d+\]\]/g, '')
+      .trim(),
+    treatment,
+    profitOwnerId: profitOwnerId ? Number(profitOwnerId) : null,
+  }
+}
+
+const packFinancingNotes = (notes = '', treatment = '', profitOwnerId = null) => [
+  String(notes || '').trim(),
+  treatment ? `[[greenfort-financing-treatment:${treatment}]]` : '',
+  treatment === 'partner_profit' && profitOwnerId ? `[[greenfort-profit-owner:${profitOwnerId}]]` : '',
+].filter(Boolean).join('\n')
+
+const normalizeFinancingTransaction = (row) => {
+  const noteMetadata = unpackFinancingNotes(row.notes)
+  return ({
+  id: row.id,
+  projectId: row.project_id,
+  type: row.entry_type,
+  status: row.entry_status,
+  counterparty: row.counterparty,
+  ownerId: row.owner_id,
+  amount: Number(row.amount || 0),
+  date: row.entry_date,
+  paymentMethod: row.payment_method || '',
+  reference: row.reference || '',
+  notes: noteMetadata.notes,
+  accountingTreatment: noteMetadata.treatment,
+  profitOwnerId: noteMetadata.profitOwnerId,
+  createdAt: row.created_at,
+  })
+}
+
+export const buildProjectWorkspace = ({ categoriesResult, invoicesResult, transactionsResult, costsResult, costDocumentsResult = { data: [], error: null }, incomesResult, reviewResult, draftsResult, checksResult, lotCommitmentsResult, financingResult }) => {
   // Costs are the core project ledger. Auxiliary sections must never make a
   // successful cost load look empty when one of their tables is unavailable.
   if (costsResult.error) throw costsResult.error
-  const warnings = [categoriesResult, invoicesResult, transactionsResult, incomesResult, reviewResult, draftsResult, checksResult, lotCommitmentsResult]
+  const warnings = [categoriesResult, invoicesResult, transactionsResult, costDocumentsResult, incomesResult, reviewResult, draftsResult, checksResult, lotCommitmentsResult, financingResult]
     .filter((result) => result?.error)
     .map((result) => result.error.message)
+
+  const documentsByCost = new Map()
+  ;(costDocumentsResult.data ?? []).forEach((row) => {
+    if (!row.cost_id) return
+    const key = String(row.cost_id)
+    if (!documentsByCost.has(key)) documentsByCost.set(key, [])
+    documentsByCost.get(key).push(normalizeStoredDocument(row))
+  })
+  const costVersions = (costsResult.data ?? []).map(normalizeCostVersion).map((cost) => {
+    const linkedDocuments = documentsByCost.get(String(cost.costId)) || []
+    if (!linkedDocuments.length) return cost
+    const seen = new Set()
+    const attachments = [...(cost.attachments || []), ...linkedDocuments].filter((attachment) => {
+      const key = String(attachment.documentId || attachment.id || attachment.storagePath || attachment.name || '')
+      if (key && seen.has(key)) return false
+      if (key) seen.add(key)
+      return true
+    })
+    return { ...cost, attachments }
+  })
 
   return {
     categories: (categoriesResult.data ?? []).map(normalizeCategory),
     invoices: (invoicesResult.data ?? []).map(normalizeInvoice),
     transactions: (transactionsResult.data ?? []).map(normalizeTransaction),
-    costVersions: (costsResult.data ?? []).map(normalizeCostVersion),
+    costVersions,
     incomes: (incomesResult.data ?? []).map(normalizeIncome),
     reviewItems: (reviewResult.data ?? []).map(normalizeReviewItem),
     constructionDrafts: (draftsResult.data ?? []).map(normalizeConstructionDraft),
     projectChecks: (checksResult.data ?? []).map(normalizeProjectCheck),
     lotCommitments: (lotCommitmentsResult?.data ?? []).map(normalizeLotCommitment),
+    financingTransactions: (financingResult?.data ?? []).map(normalizeFinancingTransaction),
     warnings,
   }
 }
 
 export async function fetchProjectWorkspace(projectId) {
   if (!supabase || projectId == null) {
-    return { categories: [], invoices: [], transactions: [], costVersions: [], incomes: [], reviewItems: [], constructionDrafts: [], projectChecks: [], lotCommitments: [] }
+    return { categories: [], invoices: [], transactions: [], costVersions: [], incomes: [], reviewItems: [], constructionDrafts: [], projectChecks: [], lotCommitments: [], financingTransactions: [] }
   }
 
-  const [categoriesResult, invoicesResult, transactionsResult, costsResult, incomesResult, reviewResult, draftsResult, checksResult, lotCommitmentsResult] = await Promise.all([
+  const [categoriesResult, invoicesResult, transactionsResult, costsResult, costDocumentsResult, incomesResult, reviewResult, draftsResult, checksResult, lotCommitmentsResult, financingResult] = await Promise.all([
     supabase.from('cost_categories').select('*').eq('project_id', projectId).order('created_at'),
-    supabase.from('invoices').select('*').eq('project_id', projectId).order('created_at', { ascending: false }),
+    supabase.from('invoices').select('*, documents(*)').eq('project_id', projectId).order('created_at', { ascending: false }),
     supabase.from('transactions').select('*').eq('project_id', projectId).order('date'),
     supabase.from('cost_versions').select('*').eq('project_id', projectId).order('created_at'),
+    supabase.from('documents').select('*').eq('project_id', projectId).not('cost_id', 'is', null).order('created_at'),
     supabase.from('incomes').select('*').eq('project_id', projectId).is('deleted_at', null).order('income_date', { ascending: false }),
     supabase.from('review_items').select('*').eq('project_id', projectId).order('created_at', { ascending: false }),
     supabase.from('construction_cost_drafts').select('*').eq('project_id', projectId).order('sort_order'),
     supabase.from('project_checks').select('*').eq('project_id', projectId).order('check_date', { ascending: false }),
     supabase.from('project_lot_commitments').select('*').eq('project_id', projectId).order('lot'),
+    supabase.from('project_financing_transactions').select('*').eq('project_id', projectId).order('entry_date', { ascending: false }),
   ])
-  return buildProjectWorkspace({ categoriesResult, invoicesResult, transactionsResult, costsResult, incomesResult, reviewResult, draftsResult, checksResult, lotCommitmentsResult })
+  return buildProjectWorkspace({ categoriesResult, invoicesResult, transactionsResult, costsResult, costDocumentsResult, incomesResult, reviewResult, draftsResult, checksResult, lotCommitmentsResult, financingResult })
+}
+
+export async function saveFinancingTransaction(entry) {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase.from('project_financing_transactions').insert({
+    project_id: entry.projectId,
+    entry_type: entry.type,
+    entry_status: entry.status,
+    counterparty: entry.counterparty,
+    owner_id: entry.ownerId || null,
+    amount: entry.amount,
+    entry_date: entry.date,
+    payment_method: entry.paymentMethod || '',
+    reference: entry.reference || '',
+    notes: packFinancingNotes(
+      entry.notes,
+      entry.accountingTreatment || (entry.type === 'owner_distribution' ? 'partner_profit' : ''),
+      entry.profitOwnerId || entry.ownerId || null,
+    ),
+  }).select('*').single()
+  if (error) throw error
+  return normalizeFinancingTransaction(data)
+}
+
+export async function deleteFinancingTransaction(entryId) {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase.from('project_financing_transactions').delete().eq('id', entryId)
+  if (error) throw error
+}
+
+export async function updateFinancingTransactionStatus(entryId, status) {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase.from('project_financing_transactions').update({
+    entry_status: status,
+    updated_at: new Date().toISOString(),
+  }).eq('id', entryId).select('*').single()
+  if (error) throw error
+  return normalizeFinancingTransaction(data)
+}
+
+export async function updateFinancingTransaction(entryId, entry) {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { data, error } = await supabase.from('project_financing_transactions').update({
+    entry_type: entry.type,
+    entry_status: entry.status,
+    counterparty: entry.counterparty,
+    owner_id: entry.type === 'owner_distribution' ? entry.ownerId || null : null,
+    amount: entry.amount,
+    entry_date: entry.date,
+    payment_method: entry.paymentMethod || '',
+    reference: entry.reference || '',
+    notes: packFinancingNotes(entry.notes, entry.accountingTreatment, entry.profitOwnerId),
+    updated_at: new Date().toISOString(),
+  }).eq('id', entryId).select('*').single()
+  if (error) throw error
+  return normalizeFinancingTransaction(data)
+}
+
+export async function updateFinancingTransactionTreatment(entryId, treatment = '', profitOwnerId = null, notes = '') {
+  if (!supabase) throw new Error('Supabase is not configured')
+  if (treatment && !['project_cost', 'partner_profit'].includes(treatment)) throw new Error('Select a valid accounting treatment')
+  const { data, error } = await supabase.from('project_financing_transactions').update({
+    notes: packFinancingNotes(notes, treatment, profitOwnerId),
+    updated_at: new Date().toISOString(),
+  }).eq('id', entryId).select('*').single()
+  if (error) throw error
+  return normalizeFinancingTransaction(data)
+}
+
+export async function updateCostCategoryBudget(projectId, categoryId, budgetedAmount, lotBudgets = undefined) {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const amount = Number(budgetedAmount)
+  if (!Number.isFinite(amount) || amount < 0) throw new Error('Enter a budget of 0 or greater')
+  const payload = { budgeted_amount: amount }
+  if (lotBudgets !== undefined) {
+    if (!lotBudgets || typeof lotBudgets !== 'object' || Array.isArray(lotBudgets)) throw new Error('Lot budgets must be an object')
+    payload.lot_budgets = Object.fromEntries(Object.entries(lotBudgets).map(([lot, value]) => {
+      const lotAmount = Number(value)
+      if (!Number.isFinite(lotAmount) || lotAmount < 0) throw new Error(`Enter a budget of 0 or greater for ${lot}`)
+      return [lot, lotAmount]
+    }))
+  }
+  const { data, error } = await supabase
+    .from('cost_categories')
+    .update(payload)
+    .eq('id', categoryId)
+    .eq('project_id', projectId)
+    .select('*')
+    .single()
+  if (error) throw error
+  return normalizeCategory(data)
 }
 
 export async function saveLotCommitment(commitment) {
@@ -231,20 +537,33 @@ export async function saveLotCommitment(commitment) {
 
 export async function saveProjectCheck(check) {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase.from('project_checks').insert({
+  const payload = {
     project_id: check.projectId,
     check_number: check.checkNumber,
     payee: check.payee,
     amount: check.amount,
     check_date: check.date,
     memo: check.memo || '',
+    mailing_address: check.mailingAddress || '',
+    check_type: check.checkType || 'payment',
+    destination_account: check.destinationAccount || '',
     account_label: check.accountLabel,
     template_key: check.templateKey || 'bofa',
     invoice_id: check.invoiceId || null,
     cost_id: check.costId || null,
     funded_by_income_id: check.fundedByIncomeId || null,
     lot: check.lot || null,
-  }).select('*').single()
+  }
+  let { data, error } = await supabase.from('project_checks').insert(payload).select('*').single()
+  if (missingCheckMetadataColumn(error)) {
+    const { mailing_address: _mailingAddress, check_type: _checkType, destination_account: _destinationAccount, ...legacyPayload } = payload
+    const legacyResult = await supabase.from('project_checks').insert({
+      ...legacyPayload,
+      memo: packLegacyCheckMemo(check.memo, check.mailingAddress, check.checkType, check.destinationAccount),
+    }).select('*').single()
+    data = legacyResult.data
+    error = legacyResult.error
+  }
   if (error) throw error
   return normalizeProjectCheck(data)
 }
@@ -258,6 +577,39 @@ export async function updateProjectCheckStatus(checkId, status) {
     voided_at: status === 'voided' ? now : undefined,
     updated_at: now,
   }).eq('id', checkId).select('*').single()
+  if (error) throw error
+  return normalizeProjectCheck(data)
+}
+
+export async function updateProjectCheck(checkId, check) {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const payload = {
+    check_number: check.checkNumber,
+    payee: check.payee,
+    amount: check.amount,
+    check_date: check.date,
+    memo: check.memo || '',
+    mailing_address: check.mailingAddress || '',
+    check_type: check.checkType || 'payment',
+    destination_account: check.destinationAccount || '',
+    account_label: check.accountLabel,
+    template_key: check.templateKey || 'bofa',
+    invoice_id: check.invoiceId || null,
+    cost_id: check.costId || null,
+    funded_by_income_id: check.fundedByIncomeId || null,
+    lot: check.lot || null,
+    updated_at: new Date().toISOString(),
+  }
+  let { data, error } = await supabase.from('project_checks').update(payload).eq('id', checkId).select('*').single()
+  if (missingCheckMetadataColumn(error)) {
+    const { mailing_address: _mailingAddress, check_type: _checkType, destination_account: _destinationAccount, ...legacyPayload } = payload
+    const legacyResult = await supabase.from('project_checks').update({
+      ...legacyPayload,
+      memo: packLegacyCheckMemo(check.memo, check.mailingAddress, check.checkType, check.destinationAccount),
+    }).eq('id', checkId).select('*').single()
+    data = legacyResult.data
+    error = legacyResult.error
+  }
   if (error) throw error
   return normalizeProjectCheck(data)
 }
@@ -420,13 +772,24 @@ export async function assignProjectAdmin(projectId, email) {
   return data
 }
 
-export async function sendProjectAdminInvite(projectId, email) {
+export async function removeProjectAdmin(projectId, userId) {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase
+    .from('project_members')
+    .delete()
+    .eq('project_id', projectId)
+    .eq('user_id', userId)
+  if (error) throw error
+}
+
+export async function sendProjectAdminInvite(projectId, email, { sendCopy = false } = {}) {
   if (!supabase) throw new Error('Supabase is not configured')
   const { data, error } = await supabase.functions.invoke('send-project-invite', {
     body: {
       projectId: Number(projectId),
       email: email.trim().toLowerCase(),
       redirectTo: window.location.origin,
+      sendCopy,
     },
   })
   if (error) throw new Error(error.message || 'The invitation email could not be sent.')
@@ -522,7 +885,13 @@ export async function saveOwner(owner) {
   }
 
   try {
-    const { data, error } = await supabase.from('owners').insert(owner).select().single()
+    let { data, error } = await supabase.from('owners').insert(owner).select().single()
+    if (error && Object.hasOwn(owner, 'ownership_percentage') && /ownership_percentage|schema cache/i.test(error.message || '')) {
+      const { ownership_percentage: _ownershipPercentage, ...legacyOwner } = owner
+      const legacyResult = await supabase.from('owners').insert(legacyOwner).select().single()
+      data = legacyResult.data
+      error = legacyResult.error
+    }
 
     if (error) {
       throw new Error(error.message)
@@ -540,12 +909,19 @@ export async function updateOwner(ownerId, updates) {
   }
 
   try {
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('owners')
       .update(updates)
       .eq('id', ownerId)
       .select()
       .single()
+
+    if (error && Object.hasOwn(updates, 'ownership_percentage') && /ownership_percentage|schema cache/i.test(error.message || '')) {
+      const { ownership_percentage: _ownershipPercentage, ...legacyUpdates } = updates
+      const legacyResult = await supabase.from('owners').update(legacyUpdates).eq('id', ownerId).select().single()
+      data = legacyResult.data
+      error = legacyResult.error
+    }
 
     if (error) {
       throw new Error(error.message)
@@ -582,6 +958,29 @@ export async function fetchOwners(projectId) {
 export async function createCostVersion(projectId, cost) {
   if (!supabase) throw new Error('Supabase is not configured')
   const costId = cost.costId || crypto.randomUUID()
+  const detailsAttachment = cost.details ? [{ _type: 'cost_details', details: cost.details }] : []
+  const accountingAttachment = cost.constructionDraftId || cost.paymentMethod || cost.paymentFeePercentage != null || cost.paymentFeeAmount != null || cost.paymentDate || cost.invoiceAmount != null || cost.vendorName || cost.mainCategory || cost.subcategory || cost.payerType || cost.paymentSource || cost.referenceNumber || cost.reimbursable || cost.loanRelated || cost.notes || cost.recurringFrequency || cost.isSoftCostParent ? [{
+    _type: 'cost_accounting',
+    constructionDraftId: cost.constructionDraftId || null,
+    paymentMethod: cost.paymentMethod || '',
+    paymentFeePercentage: cost.paymentFeePercentage ?? null,
+    paymentFeeAmount: cost.paymentFeeAmount ?? null,
+    paymentDate: cost.paymentDate || null,
+    invoiceAmount: cost.invoiceAmount ?? null,
+    vendorName: cost.vendorName || '',
+    mainCategory: cost.mainCategory || '',
+    subcategory: cost.subcategory || '',
+    payerType: cost.payerType || '',
+    payerOwnerId: cost.payerOwnerId || null,
+    payerName: cost.payerName || '',
+    paymentSource: cost.paymentSource || '',
+    referenceNumber: cost.referenceNumber || '',
+    reimbursable: Boolean(cost.reimbursable),
+    loanRelated: Boolean(cost.loanRelated),
+    notes: cost.notes || '',
+    recurringFrequency: cost.recurringFrequency || '',
+    isSoftCostParent: Boolean(cost.isSoftCostParent),
+  }] : []
   const v3Payload = {
     p_project_id: projectId,
     p_cost_id: costId,
@@ -593,10 +992,86 @@ export async function createCostVersion(projectId, cost) {
     p_category: cost.category || null,
     p_lot_allocations: cost.lotAllocations || [],
     p_cost_date: cost.date,
-    p_attachments: cost.attachments || [],
+    p_attachments: [...(cost.attachments || []), ...detailsAttachment, ...accountingAttachment],
     p_deleted: Boolean(cost.deleted),
   }
-  let { data, error } = await supabase.rpc('create_cost_version_v3', v3Payload)
+  let { data, error } = await supabase.rpc('create_cost_version_v8', {
+    ...v3Payload,
+    p_details: cost.details || null,
+    p_construction_draft_id: cost.constructionDraftId || null,
+    p_payment_method: cost.paymentMethod || null,
+    p_payment_fee_percentage: cost.paymentFeePercentage ?? null,
+    p_payment_fee_amount: cost.paymentFeeAmount ?? null,
+    p_payment_date: cost.paymentDate || null,
+    p_invoice_amount: cost.invoiceAmount ?? null,
+    p_attachments: cost.attachments || [],
+    p_vendor_name: cost.vendorName || null,
+    p_main_category: cost.mainCategory || null,
+    p_subcategory: cost.subcategory || null,
+    p_payer_type: cost.payerType || null,
+    p_payer_owner_id: cost.payerOwnerId || null,
+    p_payer_name: cost.payerName || null,
+    p_payment_source: cost.paymentSource || null,
+    p_reference_number: cost.referenceNumber || null,
+    p_reimbursable: Boolean(cost.reimbursable),
+    p_loan_related: Boolean(cost.loanRelated),
+    p_notes: cost.notes || null,
+    p_recurring_frequency: cost.recurringFrequency || null,
+    p_is_soft_cost_parent: Boolean(cost.isSoftCostParent),
+  })
+  if (error?.code === 'PGRST202') {
+    const v7Result = await supabase.rpc('create_cost_version_v7', {
+      ...v3Payload,
+      p_details: cost.details || null,
+      p_construction_draft_id: cost.constructionDraftId || null,
+      p_payment_method: cost.paymentMethod || null,
+      p_payment_fee_percentage: cost.paymentFeePercentage ?? null,
+      p_payment_fee_amount: cost.paymentFeeAmount ?? null,
+      p_payment_date: cost.paymentDate || null,
+      p_invoice_amount: cost.invoiceAmount ?? null,
+      p_attachments: [...(cost.attachments || []), ...accountingAttachment],
+    })
+    data = v7Result.data
+    error = v7Result.error
+  }
+  if (error?.code === 'PGRST202') {
+    const v6Result = await supabase.rpc('create_cost_version_v6', {
+      ...v3Payload,
+      p_details: cost.details || null,
+      p_construction_draft_id: cost.constructionDraftId || null,
+      p_payment_method: cost.paymentMethod || null,
+      p_payment_fee_percentage: cost.paymentFeePercentage ?? null,
+      p_payment_date: cost.paymentDate || null,
+      p_attachments: [...(cost.attachments || []), ...accountingAttachment],
+    })
+    data = v6Result.data
+    error = v6Result.error
+  }
+  if (error?.code === 'PGRST202') {
+    const v5Result = await supabase.rpc('create_cost_version_v5', {
+      ...v3Payload,
+      p_details: cost.details || null,
+      p_construction_draft_id: cost.constructionDraftId || null,
+      p_payment_method: cost.paymentMethod || null,
+      p_attachments: [...(cost.attachments || []), ...accountingAttachment],
+    })
+    data = v5Result.data
+    error = v5Result.error
+  }
+  if (error?.code === 'PGRST202') {
+    const v4Result = await supabase.rpc('create_cost_version_v4', {
+      ...v3Payload,
+      p_details: cost.details || null,
+      p_attachments: [...(cost.attachments || []), ...accountingAttachment],
+    })
+    data = v4Result.data
+    error = v4Result.error
+  }
+  if (error?.code === 'PGRST202') {
+    const v3Result = await supabase.rpc('create_cost_version_v3', v3Payload)
+    data = v3Result.data
+    error = v3Result.error
+  }
   if (error?.code === 'PGRST202') {
     const legacyAttachments = [...(cost.attachments || [])]
     if (cost.category || (cost.lotAllocations || []).length) {
@@ -606,6 +1081,8 @@ export async function createCostVersion(projectId, cost) {
         lotAllocations: cost.lotAllocations || [],
       })
     }
+    legacyAttachments.push(...detailsAttachment)
+    legacyAttachments.push(...accountingAttachment)
     const legacyResult = await supabase.rpc('create_cost_version_v2', {
       p_project_id: projectId,
       p_cost_id: costId,
@@ -676,9 +1153,16 @@ export async function unmergeCostBreakdownGroup(projectId, groupCostId) {
   return normalizeCostVersion(row)
 }
 
+export const buildLegacyIncomeAttachments = (income = {}) => [
+  ...(income.attachments || []),
+  ...(income.activities || []).map((activity) => ({ _type: 'income_activity', activity })),
+]
+
 export async function saveIncome(income) {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase.from('incomes').insert({
+  const attachments = income.attachments || []
+  const legacyAttachments = buildLegacyIncomeAttachments(income)
+  const payload = {
     project_id: income.projectId,
     description: income.description,
     source: income.source,
@@ -686,15 +1170,27 @@ export async function saveIncome(income) {
     income_date: income.date,
     income_type: income.type,
     lot_breakdown: income.lotBreakdown || [],
-    attachments: income.attachments || [],
-  }).select('*').single()
+    activity_breakdown: income.activities || [],
+    attachments,
+  }
+  let { data, error } = await supabase.from('incomes').insert(payload).select('*').single()
+  if (error && /activity_breakdown|schema cache/i.test(error.message || '')) {
+    const { activity_breakdown: _activityBreakdown, ...legacyPayload } = payload
+    ;({ data, error } = await supabase.from('incomes').insert({ ...legacyPayload, attachments: legacyAttachments }).select('*').single())
+  }
+  if (error && income.type === 'pre_sale_deposit' && /income_type_check|schema cache/i.test(error.message || '')) {
+    const { activity_breakdown: _activityBreakdown, ...legacyPayload } = payload
+    ;({ data, error } = await supabase.from('incomes').insert({ ...legacyPayload, income_type: 'project_income', attachments: legacyAttachments }).select('*').single())
+  }
   if (error) throw error
   return normalizeIncome(data)
 }
 
 export async function updateIncome(incomeId, updates) {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data, error } = await supabase.from('incomes').update({
+  const attachments = updates.attachments || []
+  const legacyAttachments = buildLegacyIncomeAttachments(updates)
+  const payload = {
     project_id: updates.projectId,
     description: updates.description,
     source: updates.source,
@@ -702,9 +1198,19 @@ export async function updateIncome(incomeId, updates) {
     income_date: updates.date,
     income_type: updates.type,
     lot_breakdown: updates.lotBreakdown || [],
-    attachments: updates.attachments || [],
+    activity_breakdown: updates.activities || [],
+    attachments,
     updated_at: new Date().toISOString(),
-  }).eq('id', incomeId).select('*').single()
+  }
+  let { data, error } = await supabase.from('incomes').update(payload).eq('id', incomeId).select('*').single()
+  if (error && /activity_breakdown|schema cache/i.test(error.message || '')) {
+    const { activity_breakdown: _activityBreakdown, ...legacyPayload } = payload
+    ;({ data, error } = await supabase.from('incomes').update({ ...legacyPayload, attachments: legacyAttachments }).eq('id', incomeId).select('*').single())
+  }
+  if (error && updates.type === 'pre_sale_deposit' && /income_type_check|schema cache/i.test(error.message || '')) {
+    const { activity_breakdown: _activityBreakdown, ...legacyPayload } = payload
+    ;({ data, error } = await supabase.from('incomes').update({ ...legacyPayload, income_type: 'project_income', attachments: legacyAttachments }).eq('id', incomeId).select('*').single())
+  }
   if (error) throw error
   return normalizeIncome(data)
 }
@@ -732,6 +1238,27 @@ const ALLOWED_DOCUMENT_MIME_TYPES = new Set([
   'image/heic',
   'image/heif',
 ])
+
+const MISCELLANEOUS_DOCUMENT_TYPES = new Set([
+  ...ALLOWED_DOCUMENT_MIME_TYPES,
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'text/csv',
+  'text/plain',
+])
+
+const miscellaneousContentType = (file) => {
+  if (file.type) return file.type.toLowerCase()
+  const extension = String(file.name || '').toLowerCase().split('.').pop()
+  return ({
+    pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', heic: 'image/heic', heif: 'image/heif',
+    doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    csv: 'text/csv', txt: 'text/plain',
+  })[extension] || ''
+}
 
 export async function uploadProjectDocument(projectId, file) {
   if (!supabase) throw new Error('Supabase is not configured')
@@ -771,6 +1298,134 @@ export async function uploadProjectDocument(projectId, file) {
   }
 }
 
+export async function fetchMiscellaneousDocuments(projectId) {
+  if (!supabase || projectId == null) return []
+  const { data, error } = await supabase
+    .from('documents')
+    .select('*')
+    .eq('project_id', projectId)
+    .like('storage_path', `${projectId}/miscellaneous/%`)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return (data || []).map(normalizeStoredDocument)
+}
+
+export async function fetchBankStatementDocuments(projectId) {
+  if (!supabase || projectId == null) return []
+  const { data, error } = await supabase
+    .from('documents')
+    .select('*')
+    .eq('project_id', projectId)
+    .like('storage_path', `${projectId}/bank-statements/%`)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return (data || []).map(normalizeStoredDocument)
+}
+
+export async function uploadBankStatementDocument(projectId, file, bank = '') {
+  if (!supabase) throw new Error('Supabase is not configured')
+  if (projectId == null) throw new Error('Select a project before uploading a bank statement')
+  if (!file || file.size <= 0) throw new Error('Choose a non-empty bank statement')
+  if (file.size > MAX_DOCUMENT_BYTES) throw new Error('Choose a bank statement smaller than 10 MB')
+  const contentType = miscellaneousContentType(file)
+  const allowedTypes = new Set([
+    'application/pdf',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'text/csv',
+  ])
+  if (!allowedTypes.has(contentType)) throw new Error('Use a PDF, Excel, or CSV bank statement')
+  if (!['boa', 'providence', 'amex', 'flagstar'].includes(bank)) throw new Error('Choose the bank for this statement')
+
+  const { data: existing, error: existingError } = await supabase
+    .from('documents')
+    .select('*')
+    .eq('project_id', projectId)
+    .eq('original_name', file.name)
+    .eq('size_bytes', file.size)
+    .like('storage_path', `${projectId}/bank-statements/%`)
+    .limit(1)
+  if (existingError) throw existingError
+  const existingForBank = existing?.find((document) => {
+    const path = String(document.storage_path || '')
+    return path.includes(`/bank-statements/${bank}/`)
+      || (bank === 'boa' && /^\d+\/bank-statements\/[^/]+$/.test(path))
+  })
+  if (existingForBank) return normalizeStoredDocument(existingForBank)
+
+  const storagePath = `${projectId}/bank-statements/${bank}/${crypto.randomUUID()}-${safeFileName(file.name)}`
+  const { error: uploadError } = await supabase.storage
+    .from('accounting-documents')
+    .upload(storagePath, file, { contentType, upsert: false })
+  if (uploadError) throw uploadError
+  const { data, error } = await supabase.from('documents').insert({
+    project_id: projectId,
+    storage_bucket: 'accounting-documents',
+    storage_path: storagePath,
+    original_name: file.name,
+    mime_type: contentType,
+    size_bytes: file.size,
+  }).select('*').single()
+  if (error) {
+    await supabase.storage.from('accounting-documents').remove([storagePath])
+    throw error
+  }
+  return normalizeStoredDocument(data)
+}
+
+export async function uploadMiscellaneousDocument(projectId, file) {
+  if (!supabase) throw new Error('Supabase is not configured')
+  if (projectId == null) throw new Error('Select a project before uploading a document')
+  if (!file || file.size <= 0) throw new Error('Choose a non-empty document')
+  if (file.size > MAX_DOCUMENT_BYTES) throw new Error('Choose a document smaller than 10 MB')
+  const contentType = miscellaneousContentType(file)
+  if (!MISCELLANEOUS_DOCUMENT_TYPES.has(contentType)) throw new Error('Use a PDF, image, Word, Excel, CSV, or text document')
+  const storagePath = `${projectId}/miscellaneous/${crypto.randomUUID()}-${safeFileName(file.name)}`
+  const { error: uploadError } = await supabase.storage
+    .from('accounting-documents')
+    .upload(storagePath, file, { contentType, upsert: false })
+  if (uploadError) throw uploadError
+  const { data, error } = await supabase.from('documents').insert({
+    project_id: projectId,
+    storage_bucket: 'accounting-documents',
+    storage_path: storagePath,
+    original_name: file.name,
+    mime_type: contentType,
+    size_bytes: file.size,
+  }).select('*').single()
+  if (error) {
+    await supabase.storage.from('accounting-documents').remove([storagePath])
+    throw error
+  }
+  return normalizeStoredDocument(data)
+}
+
+export async function deleteMiscellaneousDocument(projectId, document) {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const documentId = document?.documentId || document?.id
+  const expectedPrefix = `${projectId}/miscellaneous/`
+  if (!documentId || !String(document.storagePath || '').startsWith(expectedPrefix)) throw new Error('This is not a miscellaneous project document')
+  const { error: deleteError } = await supabase.from('documents').delete().eq('id', documentId).eq('project_id', projectId)
+  if (deleteError) throw deleteError
+  const { error: storageError } = await supabase.storage.from(document.storageBucket || 'accounting-documents').remove([document.storagePath])
+  if (storageError) throw storageError
+}
+
+export async function updateMiscellaneousDocument(projectId, documentId, updates) {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const displayName = String(updates.name || '').trim()
+  const documentDate = String(updates.documentDate || '').trim()
+  const description = String(updates.description || '').trim()
+  if (!displayName) throw new Error('Enter a document name')
+  const { data, error } = await supabase.from('documents').update({
+    display_name: displayName,
+    document_date: documentDate || null,
+    description,
+  }).eq('id', documentId).eq('project_id', projectId).select('*').single()
+  if (error) throw error
+  return normalizeStoredDocument(data)
+}
+
 export async function createDocumentSignedUrl(attachment, { download = false } = {}) {
   if (!supabase) throw new Error('Supabase is not configured')
   if (!attachment?.storagePath) throw new Error('This attachment does not have a stored file path')
@@ -803,6 +1458,7 @@ export async function saveIntakeItem(projectId, item, file = null) {
     }).select('*').single()
     if (error) throw error
     invoice = normalizeInvoice(data)
+    if (document) invoice.attachments = [{ ...document, id: document.documentId }]
   }
 
   const { data, error } = await supabase.from('review_items').insert({

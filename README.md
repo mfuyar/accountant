@@ -14,8 +14,21 @@ Configure these server-side secrets on the Supabase Edge Functions:
 - `GEMINI_MODEL` (optional)
 - `ALLOWED_REDIRECT_ORIGINS` — comma-separated trusted application origins, such as
   `https://accounting.example.com,http://localhost:5173`
+- `RESEND_API_KEY` and `REMINDER_EMAIL_FROM` — required to send the initiating
+  administrator a confirmation copy of admin reminder emails. The From value must use
+  a verified sending domain, for example `Greenfort Accountant <access@example.com>`.
+- `PLAID_CLIENT_ID` and `PLAID_SECRET` — Plaid server credentials for the read-only
+  Bank of America connection.
+- `PLAID_ENV` — `sandbox`, `development`, or `production`. Start with `sandbox` and
+  use `production` only after Plaid approves production access and Bank of America OAuth.
+- `PLAID_TOKEN_ENCRYPTION_KEY` — a private random value of at least 32 characters used
+  to encrypt Plaid access tokens before database storage. Rotating it requires a planned
+  re-encryption or reconnection of existing bank connections.
+- `PLAID_REDIRECT_URI` — the exact HTTPS OAuth redirect registered in the Plaid Dashboard.
+  For local Sandbox testing this may be omitted; Bank of America production OAuth needs it.
 
-Deploy both `extract-invoice` and `send-project-invite` with JWT verification enabled.
+Apply the database migrations, then deploy `extract-invoice`, `send-project-invite`, and
+`plaid-bank` with JWT verification enabled.
 The functions also validate the user and project membership themselves.
 
 ```sh

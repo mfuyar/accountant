@@ -1,12 +1,6 @@
 import { useEffect, useState } from 'react'
 import { extractTransactionFromImage, suggestCategory } from './lib/gemini'
-
-const currency = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 2,
-})
+import { currency } from './lib/currency'
 
 function validateDocument(file) {
   const supportedType = file.type.startsWith('image/') || file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')

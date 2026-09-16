@@ -29,6 +29,75 @@ function parseMoney(value) {
   return negative ? -Math.abs(parsed) : parsed
 }
 
+const transactionFingerprint = (parts) => {
+  let hash = 2166136261
+  const text = parts.map((part) => String(part ?? '').trim().toLowerCase()).join('|')
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+const categoryForDescription = (description, amount) => {
+  const text = description.toLowerCase()
+  if (amount > 0) {
+    if (/private (?:person |lender )?loan|loan from|promissory note|personal loan proceeds/.test(text)) return 'Private Lender Loan Proceeds'
+    if (/payment received|autopay payment|online payment|thank you/.test(text)) return 'Credit Card Payment'
+    if (/interest (?:earned|paid)|interest income/.test(text)) return 'Interest Income'
+    if (/cash\s*back|cashback|rewards? (?:credit|redemption)|reward dollars/.test(text)) return 'Bank Cash Back'
+    if (/refund|reimbursement|statement credit/.test(text)) return 'Refund / Reimbursement'
+    if (/deposit|mobile check|merchant services|customer payment|client payment|invoice payment|sales receipt/.test(text)) return 'Business Income'
+    return ''
+  }
+  const rules = [
+    [/private (?:person |lender )?loan|private loan payment|promissory note/, 'Private Lender Loan Payment'],
+    [/american express|amex.*payment|credit card payment/, 'Credit Card Payment'],
+    [/account transfer|online transfer|transfer between/, 'Bank Transfer'],
+    [/bank fee|service charge|wire fee|late fee|interest charge|annual fee/, 'Bank Fees'],
+    [/facebook|google ads|marketing|meta platforms|signage|advertis/, 'Advertising & Marketing'],
+    [/adobe|amazon web services|aws|dropbox|google workspace|lovable|microsoft|netlify|quickbooks|software|taxact|vercel/, 'Software & Technology'],
+    [/insurance|geico|progressive|state farm/, 'Insurance'],
+    [/irs|department of revenue|property tax|tax payment|license fee/, 'Taxes & Licenses'],
+    [/electric|energy|gas bill|internet|phone|spectrum|utility|verizon|water/, 'Utilities'],
+    [/permit|inspection|recording fee/, 'Permits & Fees'],
+    [/attorney|law office|legal|accountant|cpa|bookkeep/, 'Legal & Professional'],
+    [/concrete|contractor|construction|electrician|plumb|roofing/, 'Contract Labor'],
+    [/home depot|lowe'?s|lumber|building material|supply house/, 'Materials & Supplies'],
+    [/repair|maintenance|equipment service/, 'Repairs & Maintenance'],
+    [/office rent|rent payment|commercial lease|workspace/, 'Rent or Lease'],
+    [/exxon|fuel|gas station|shell oil|toll|parking|vehicle/, 'Vehicle Expense'],
+    [/restaurant|cafe|coffee|doordash|grubhub|uber eats/, 'Meals'],
+    [/airlines|airways|hotel|marriott|rental car/, 'Travel'],
+    [/office depot|office max|staples/, 'Office Supplies'],
+    [/providence bank/, 'Financing / Loan Payment'],
+  ]
+  return rules.find(([pattern]) => pattern.test(text))?.[1] || ''
+}
+
+const businessIncomeCategories = new Set(['Business Income', 'Project Income', 'Interest Income'])
+const nonTaxCategories = new Set([
+  'Bank Cash Back',
+  'Bank Transfer',
+  'Credit Card Payment',
+  'Financing / Loan Payment',
+  'Loan Draw',
+  'Owner Contribution',
+  'Personal / Non-Project',
+  'Private Lender Loan Payment',
+  'Private Lender Loan Principal',
+  'Private Lender Loan Proceeds',
+])
+
+export function taxTreatmentFor(item) {
+  if (item.reviewReasons?.length || !item.category) return 'Needs review'
+  if (businessIncomeCategories.has(item.category)) return 'Business income'
+  if (nonTaxCategories.has(item.category)) return 'Non-tax cash movement'
+  if (item.category === 'Refund / Reimbursement') return 'Needs review'
+  if (item.amount < 0) return 'Business expense'
+  return 'Needs review'
+}
+
 function formatDate(value) {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}`
@@ -51,6 +120,8 @@ function valueFor(record, field) {
 
 function detectOwner(record, bank, defaultOwner, amount, category) {
   if (bank === 'flagstar') return 'Banu U'
+  if (bank === 'providence' || bank === 'amex') return 'GreenFort'
+  if (category.startsWith('Private Lender Loan')) return 'GreenFort'
   const explicitOwner = `${valueFor(record, 'owner') ?? ''} ${valueFor(record, 'account') ?? ''}`.toLowerCase()
   if (explicitOwner.includes('banu')) return 'Banu U'
   if (explicitOwner.includes('kemal')) return 'Kemal I'
@@ -68,6 +139,23 @@ function detectOwner(record, bank, defaultOwner, amount, category) {
 
 const cleanText = (value) => String(value ?? '').replaceAll('&amp;', '&').trim()
 
+const isGreenFortParty = (value) => {
+  const normalized = cleanText(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  return /^(?:green fort|greenfort)(?: llc)?$/.test(normalized)
+}
+
+const isGreenFortAccountTransfer = ({ bank, description, vendor, memo, rawDescription, transactionType }) => {
+  if (!['boa', 'flagstar'].includes(bank)) return false
+  const text = [description, vendor, memo, rawDescription, transactionType].map(cleanText).join(' ').toLowerCase()
+  const namedAsPayee = [description, vendor].some(isGreenFortParty)
+  const namesGreenFort = /\bgreen\s*fort(?:\s*\*?\s*l\.?l\.?c\.?)?\b|\bgreenfort(?:\s+l\.?l\.?c\.?)?\b/.test(text)
+  const namesOtherBank = bank === 'boa'
+    ? /\bflagstar\b|\bflagbk\b/.test(text)
+    : /bank of america|\bbofa\b/.test(text)
+  const transferEvidence = /\btransfer\b|webxfr|acctverify|account verify/.test(text)
+  return namedAsPayee || (namesGreenFort && namesOtherBank && transferEvidence)
+}
+
 function reviewClassification({ amount, category, owner }) {
   let normalizedCategory = category.replace(/\s*\(review\)\s*/gi, '').trim()
   const reviewReasons = []
@@ -80,6 +168,10 @@ function reviewClassification({ amount, category, owner }) {
     }
   } else if (normalizedCategory.toLowerCase() === 'personal / non-project') {
     reviewReasons.push('Confirm whether this is personal or a project expense.')
+  } else if (normalizedCategory === 'Private Lender Loan Payment') {
+    reviewReasons.push('Choose whether this payment is principal, interest, or a combination that must be split.')
+  } else if (normalizedCategory === 'Refund / Reimbursement') {
+    reviewReasons.push('Choose whether this offsets an expense or should be reported as business income.')
   }
 
   if (!normalizedCategory) reviewReasons.push('Choose a transaction category.')
@@ -96,12 +188,15 @@ export function parseBankRows(rows, { bank, defaultOwner = 'Project / Unassigned
   if (headerIndex < 0) return []
   const headers = rows[headerIndex].map(normalizeHeader)
 
-  return rows.slice(headerIndex + 1).filter((row) => row.some((cell) => String(cell ?? '').trim())).map((row, index) => {
+  const duplicateOccurrences = new Map()
+  return rows.slice(headerIndex + 1).filter((row) => row.some((cell) => String(cell ?? '').trim())).map((row) => {
     const record = Object.fromEntries(headers.map((header, column) => [header || `column${column}`, row[column]]))
     const directAmount = parseMoney(valueFor(record, 'amount'))
     const debit = parseMoney(valueFor(record, 'debit'))
     const credit = parseMoney(valueFor(record, 'credit'))
-    const amount = directAmount ?? ((credit ?? 0) - Math.abs(debit ?? 0))
+    const importedAmount = directAmount ?? ((credit ?? 0) - Math.abs(debit ?? 0))
+    // American Express exports charges as positive and payments/credits as negative.
+    const amount = bank === 'amex' && directAmount != null ? -importedAmount : importedAmount
     const date = formatDate(valueFor(record, 'date'))
     const importedVendor = cleanText(valueFor(record, 'vendor'))
     const vendor = importedVendor.toLowerCase().includes('providence bank')
@@ -110,7 +205,11 @@ export function parseBankRows(rows, { bank, defaultOwner = 'Project / Unassigned
     const rawDescription = cleanText(valueFor(record, 'rawDescription'))
     const memo = cleanText(valueFor(record, 'memo'))
     const description = vendor || cleanText(valueFor(record, 'description')) || rawDescription || memo
-    const importedCategory = cleanText(valueFor(record, 'category'))
+    const importedTransactionType = cleanText(valueFor(record, 'transactionType'))
+    const isAccountTransfer = isGreenFortAccountTransfer({ bank, description, vendor, memo, rawDescription, transactionType: importedTransactionType })
+    const importedCategory = isAccountTransfer
+      ? 'Bank Transfer'
+      : cleanText(valueFor(record, 'category')) || categoryForDescription(`${description} ${memo} ${rawDescription}`, amount)
     const phase = cleanText(valueFor(record, 'phase'))
     const confidence = cleanText(valueFor(record, 'confidence'))
     const owner = detectOwner(record, bank, defaultOwner, amount, importedCategory)
@@ -125,8 +224,14 @@ export function parseBankRows(rows, { bank, defaultOwner = 'Project / Unassigned
     if (!description) reviewReasons.push('missing description')
     if (!Number.isFinite(amount) || (amount === 0 && !isFeeWaiver)) reviewReasons.push('missing or zero amount')
 
+    const fingerprint = transactionFingerprint([bank, date, amount, description, valueFor(record, 'account')])
+    const occurrence = duplicateOccurrences.get(fingerprint) || 0
+    duplicateOccurrences.set(fingerprint, occurrence + 1)
+    const sourceRowId = `${bank}:${fingerprint}:${occurrence}`
+
     return {
-      id: `${Date.now()}-${index}`,
+      id: sourceRowId,
+      sourceRowId,
       bank,
       owner,
       isOwnerContribution,
@@ -142,7 +247,7 @@ export function parseBankRows(rows, { bank, defaultOwner = 'Project / Unassigned
       memo,
       confidence,
       classificationStatus: reviewReasons.length ? 'needs_review' : classification.classificationStatus,
-      transactionType: cleanText(valueFor(record, 'transactionType')),
+      transactionType: importedTransactionType,
       rawDescription,
       reviewReasons: [...new Set(reviewReasons)],
     }

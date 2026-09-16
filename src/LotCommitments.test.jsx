@@ -21,6 +21,7 @@ describe('LotCommitments', () => {
     expect(screen.queryByLabelText('Lot 3 address')).not.toBeInTheDocument()
     fireEvent.click(screen.getByLabelText('Lot 3 details'))
     expect(screen.getByLabelText('Lot 3 address')).toBeInTheDocument()
+    expect(screen.getAllByText('Providence loan ••••0786').length).toBeGreaterThan(0)
   })
 
   it('saves a lot commitment with its address and amount', async () => {
@@ -370,8 +371,8 @@ describe('LotCommitments', () => {
     await waitFor(() => expect(onSaveLotCommitment).toHaveBeenCalledWith(expect.objectContaining({
       attachments: [expect.objectContaining({ id: 'doc-1', label: 'Elevation Drawings' })],
     })))
+    await waitFor(() => expect(screen.getByText('Elevation Drawings')).toBeInTheDocument())
     expect(screen.queryByText('Other')).not.toBeInTheDocument()
-    expect(screen.getByText('Elevation Drawings')).toBeInTheDocument()
   })
 
   it('hides the manual save button once a commitment letter is on file and nothing has changed', () => {

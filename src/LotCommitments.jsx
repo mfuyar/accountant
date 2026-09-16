@@ -1,11 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { classifyLotDocument, extractLotCommitmentFromDocument } from './lib/gemini'
-
-const currency = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-})
+import { providenceLoanAccountLabel } from './lib/providenceLoanAccounts'
+import { currency } from './lib/currency'
 
 const subdivisionKey = 'Subdivision'
 const loanLotKeys = ['Lot 2', 'Lot 3', 'Lot 4']
@@ -745,6 +741,7 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
                 <span>{draft.address || 'No address yet'}</span>
               </span>
               <span className="lot-commitment-toggle-summary">
+                {hasLoan ? <span>{providenceLoanAccountLabel(lot)}</span> : null}
                 <span>{draft.permitNumber ? `Permit ${draft.permitNumber}` : 'No permit number yet'}</span>
                 <span>{documentCount} document{documentCount === 1 ? '' : 's'}</span>
                 {!isSubdivision ? <span>Spent {currency.format(spent)}</span> : null}
@@ -758,6 +755,7 @@ function LotCommitments({ lotCommitments = emptyLotCommitments, incomes = emptyI
               </label>
               {hasLoan ? <label>Commitment amount
                 <input aria-label={`${lot} commitment amount`} type="number" min="0" step="0.01" value={draft.commitmentAmount} onChange={(event) => setLotDraftField(lot, 'commitmentAmount', event.target.value)} />
+                <small>{providenceLoanAccountLabel(lot)}</small>
               </label> : <span>{isSubdivision ? 'Shared documents that apply to every lot (subdivision plat, subdivision drawings, etc.).' : 'No loan on this lot — spending shown below is tracked from checks tagged to it.'}</span>}
               <label>Permit number
                 <input aria-label={`${lot} permit number`} value={draft.permitNumber || ''} onChange={(event) => setLotDraftField(lot, 'permitNumber', event.target.value)} />

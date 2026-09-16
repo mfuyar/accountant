@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { assignProjectAdmin, fetchProjectAccess, sendProjectAdminInvite } from './lib/supabase'
+import { fetchProjectAccess, removeProjectAdmin, sendProjectAdminInvite } from './lib/supabase'
 
 function AccessAdmin({ projects, accessProfile }) {
   const [projectId, setProjectId] = useState(projects[0]?.id ?? '')
@@ -10,6 +10,8 @@ function AccessAdmin({ projects, accessProfile }) {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [resendingEmail, setResendingEmail] = useState('')
+  const [remindingEmail, setRemindingEmail] = useState('')
+  const [removingUserId, setRemovingUserId] = useState('')
 
   const loadAccess = async (selectedProjectId) => {
     if (selectedProjectId === '') return
@@ -31,7 +33,7 @@ function AccessAdmin({ projects, accessProfile }) {
     loadAccess(projectId)
   }, [projectId, projects])
 
-  const handleAssign = async (event, sendEmail = false) => {
+  const handleInvite = async (event) => {
     event.preventDefault()
     setError('')
     setMessage('')
@@ -46,15 +48,10 @@ function AccessAdmin({ projects, accessProfile }) {
     setSaving(true)
     try {
       const normalizedEmail = email.trim().toLowerCase()
-      if (sendEmail) {
-        await sendProjectAdminInvite(projectId, normalizedEmail)
-        setMessage(`Invitation email sent to ${normalizedEmail}. They will receive project administrator access when they sign in.`)
-      } else {
-        const result = await assignProjectAdmin(projectId, normalizedEmail)
-        setMessage(result === 'assigned'
-          ? `${normalizedEmail} is now a project administrator.`
-          : `${normalizedEmail} will become a project administrator when they first sign in.`)
-      }
+      const result = await sendProjectAdminInvite(projectId, normalizedEmail)
+      setMessage(result?.delivery === 'magic_link'
+        ? `${normalizedEmail} already has an account. A sign-in link was sent and project administrator access was added.`
+        : `Invitation email sent to ${normalizedEmail}. They will have administrator access to this project only.`)
       setEmail('')
       await loadAccess(projectId)
     } catch (assignError) {
@@ -64,18 +61,56 @@ function AccessAdmin({ projects, accessProfile }) {
     }
   }
 
+  const handleRemove = async (member) => {
+    const memberEmail = member.profiles?.email || 'this administrator'
+    if (!window.confirm(`Remove ${memberEmail} as an administrator for this project?`)) return
+    setError('')
+    setMessage('')
+    setRemovingUserId(member.user_id)
+    try {
+      await removeProjectAdmin(projectId, member.user_id)
+      setMessage(`${memberEmail} no longer has administrator access to this project.`)
+      await loadAccess(projectId)
+    } catch (removeError) {
+      setError(removeError.message || 'The administrator could not be removed.')
+    } finally {
+      setRemovingUserId('')
+    }
+  }
+
   const handleResendInvite = async (invitation) => {
     setError('')
     setMessage('')
     setResendingEmail(invitation.email)
     try {
-      await sendProjectAdminInvite(projectId, invitation.email)
-      setMessage(`Invitation email resent to ${invitation.email}.`)
+      const result = await sendProjectAdminInvite(projectId, invitation.email, { sendCopy: true })
+      setMessage(result?.copyDelivery === 'sent'
+        ? `An administrator invitation reminder was sent to ${invitation.email}, with a confirmation copy sent to you.`
+        : `The invitation reminder was sent to ${invitation.email}, but the confirmation copy could not be sent. Ask a global administrator to configure reminder email copies.`)
       await loadAccess(projectId)
     } catch (resendError) {
       setError(resendError.message || 'The invitation email could not be resent.')
     } finally {
       setResendingEmail('')
+    }
+  }
+
+  const handleReminder = async (member) => {
+    const memberEmail = member.profiles?.email
+    if (!memberEmail) return
+    setError('')
+    setMessage('')
+    setRemindingEmail(memberEmail)
+    try {
+      const result = await sendProjectAdminInvite(projectId, memberEmail, { sendCopy: true })
+      setMessage(result?.copyDelivery === 'sent'
+        ? `A secure sign-in reminder was sent to ${memberEmail}, with a confirmation copy sent to you. Their access has not changed.`
+        : `The sign-in reminder was sent to ${memberEmail}, but the confirmation copy could not be sent. Their access has not changed.`)
+      await loadAccess(projectId)
+    } catch (reminderError) {
+      setError(reminderError.message || 'The reminder email could not be sent.')
+    } finally {
+      setRemindingEmail('')
     }
   }
 
@@ -89,7 +124,11 @@ function AccessAdmin({ projects, accessProfile }) {
         </div>
       </div>
       <div className="section-grid">
-        <form className="owner-form" noValidate onSubmit={handleAssign}>
+        <form className="owner-form" noValidate onSubmit={handleInvite}>
+          <div>
+            <h3>Invite another administrator</h3>
+            <p>They can manage accounting and invite administrators for the selected project only.</p>
+          </div>
           <label>
             Project
             <select aria-label="Administrator project" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
@@ -103,15 +142,26 @@ function AccessAdmin({ projects, accessProfile }) {
           {error ? <p className="validation-error" role="alert">{error}</p> : null}
           {message ? <p role="status">{message}</p> : null}
           <div className="button-row">
-            <button type="submit" className="secondary-button" disabled={saving}>Assign only</button>
-            <button type="button" className="action-button" disabled={saving} onClick={(event) => handleAssign(event, true)}>{saving ? 'Sending…' : 'Assign & send invite'}</button>
+            <button type="submit" className="action-button" disabled={saving}>{saving ? 'Sending invitation…' : 'Send admin invitation'}</button>
           </div>
         </form>
         <div className="table-card">
           {members.map((member) => (
             <div key={member.user_id} className="table-row">
               <div><strong>{member.profiles?.full_name || member.profiles?.email}</strong><p>{member.profiles?.email}</p></div>
-              <span>{member.profiles?.is_global_admin ? 'Global admin' : 'Project admin'}</span>
+              <div className="button-row">
+                <span>{member.profiles?.is_global_admin ? 'Global admin' : 'Project admin'}</span>
+                {member.profiles?.email?.toLowerCase() !== accessProfile.email?.toLowerCase() ? (
+                  <button type="button" className="secondary-button" disabled={remindingEmail === member.profiles?.email} onClick={() => handleReminder(member)}>
+                    {remindingEmail === member.profiles?.email ? 'Sending…' : 'Send sign-in reminder'}
+                  </button>
+                ) : null}
+                {!member.profiles?.is_global_admin && member.profiles?.email?.toLowerCase() !== accessProfile.email?.toLowerCase() ? (
+                  <button type="button" className="secondary-button" disabled={removingUserId === member.user_id} onClick={() => handleRemove(member)}>
+                    {removingUserId === member.user_id ? 'Removing…' : 'Remove'}
+                  </button>
+                ) : null}
+              </div>
             </div>
           ))}
           {invitations.map((invitation) => (
@@ -120,7 +170,7 @@ function AccessAdmin({ projects, accessProfile }) {
               <div className="button-row">
                 <span>Invited admin</span>
                 <button type="button" className="secondary-button" disabled={resendingEmail === invitation.email} onClick={() => handleResendInvite(invitation)}>
-                  {resendingEmail === invitation.email ? 'Resending…' : 'Resend invite'}
+                  {resendingEmail === invitation.email ? 'Sending reminder…' : 'Send invitation reminder'}
                 </button>
               </div>
             </div>

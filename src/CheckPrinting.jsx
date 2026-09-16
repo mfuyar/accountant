@@ -1,12 +1,7 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { amountToCheckWords } from './lib/checks'
-
-const currency = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-})
+import { currency } from './lib/currency'
 
 const today = () => new Date().toLocaleDateString('en-CA')
 const numericAmount = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -123,6 +118,20 @@ const displayCheckNumber = (checkNumber, fallback = '') => {
   return value && value !== '0' ? value : fallback
 }
 
+const invoiceMemo = (invoice) => [
+  invoice?.invoiceNumber ? `Inv ${invoice.invoiceNumber}` : '',
+  invoice?.description || invoice?.classification || '',
+].filter(Boolean).join(' · ').slice(0, 100)
+
+const costMemo = (cost) => {
+  const attachment = (cost?.attachments || []).find((entry) => entry.reference)
+  const reference = attachment?.reference || String(cost?.details || '').match(/(?:Reference|Invoice(?:\s+(?:number|no\.?|#))?)\s*:\s*([^\n]+)/i)?.[1]?.trim()
+  const lot = (cost?.lotAllocations || []).length === 1 ? cost.lotAllocations[0].lot : ''
+  return [reference ? `Inv ${reference}` : '', cost?.name || '', lot].filter(Boolean).join(' · ').slice(0, 100)
+}
+
+const costMailingAddress = (cost) => (cost?.attachments || []).find((entry) => entry.vendorMailingAddress)?.vendorMailingAddress || ''
+
 const errorMessage = (error, fallback = 'Unknown error') => {
   if (error instanceof Error && error.message) return error.message
   if (error && typeof error === 'object') {
@@ -137,26 +146,34 @@ const isDuplicateCheckError = (error) => {
 }
 
 const jobLots = ['Lot 1', 'Lot 2', 'Lot 3', 'Lot 4']
+const emptyList = []
 
-function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDraws = [], onSaveCheck, onUpdateStatus, onUpdateLink, onUpdateTemplate, onUpdateFunding, onUpdateLot }) {
+function CheckPrinting({ project, checks = emptyList, invoices = emptyList, costs = emptyList, loanDraws = emptyList, vendorAddresses = emptyList, initialDraft = null, onInitialDraftApplied, onSaveCheck, onUpdateCheck, onUpdateStatus, onUpdateLink, onUpdateTemplate, onUpdateFunding, onUpdateLot, onOpenDocument, onPrintPaidInvoice, onExtractVendorAddress, onSaveVendorAddress, onImportVendorAddresses }) {
   const [checkNumber, setCheckNumber] = useState('')
   const [payee, setPayee] = useState('')
   const [amount, setAmount] = useState('')
   const [checkDate, setCheckDate] = useState(today)
   const [memo, setMemo] = useState('')
+  const [mailingAddress, setMailingAddress] = useState('')
+  const [editingCheckId, setEditingCheckId] = useState(null)
+  const [originalCheckNumber, setOriginalCheckNumber] = useState('')
   const [accountLabel, setAccountLabel] = useState('Bank of America')
+  const [checkType, setCheckType] = useState('payment')
+  const [destinationAccount, setDestinationAccount] = useState('')
   const [templateKey, setTemplateKey] = useState('bofa')
   const [message, setMessage] = useState(null)
   const [saving, setSaving] = useState(false)
   const [printingCheck, setPrintingCheck] = useState(null)
   const [printingTemplateSheet, setPrintingTemplateSheet] = useState(false)
   const [printingCarrierGuide, setPrintingCarrierGuide] = useState(false)
+  const [printingEnvelope, setPrintingEnvelope] = useState(null)
   const [horizontalOffset, setHorizontalOffset] = useState('0')
   const [verticalOffset, setVerticalOffset] = useState('0')
   const [fieldOffsets, setFieldOffsets] = useState(loadSavedFieldOffsets)
   const [fieldOffsetsExpanded, setFieldOffsetsExpanded] = useState(false)
   const [fieldOffsetsSavedMessage, setFieldOffsetsSavedMessage] = useState('')
   const [printerPreset, setPrinterPreset] = useState('letter_voucher')
+  const [envelopeRotation, setEnvelopeRotation] = useState('180')
   const [attachmentTarget, setAttachmentTarget] = useState('')
   const [fundingTarget, setFundingTarget] = useState('')
   const [lotTarget, setLotTarget] = useState('')
@@ -165,7 +182,46 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
   const [lotCheckId, setLotCheckId] = useState(null)
   const [viewingCheck, setViewingCheck] = useState(null)
   const [updatingTemplate, setUpdatingTemplate] = useState(false)
+  const [pendingVoidedReprintId, setPendingVoidedReprintId] = useState(null)
+  const [pendingVoidCheckId, setPendingVoidCheckId] = useState(null)
+  const [extractingVendorAddress, setExtractingVendorAddress] = useState(false)
+  const [importingVendorAddresses, setImportingVendorAddresses] = useState(false)
+  const [envelopeSetupNeeded, setEnvelopeSetupNeeded] = useState(false)
+  const [preparingEnvelope, setPreparingEnvelope] = useState(false)
+  const [allowAdditionalCheck, setAllowAdditionalCheck] = useState(false)
+  const [registerSearch, setRegisterSearch] = useState('')
+  const [registerStatus, setRegisterStatus] = useState('all')
+  const [registerLot, setRegisterLot] = useState('all')
+  const [registerLink, setRegisterLink] = useState('all')
+  const [registerDraw, setRegisterDraw] = useState('all')
+  const [registerDateFrom, setRegisterDateFrom] = useState('')
+  const [registerDateTo, setRegisterDateTo] = useState('')
+  const [constructionCoverageFilter, setConstructionCoverageFilter] = useState('all')
   const previewPanelRef = useRef(null)
+  const attachmentSelectRef = useRef(null)
+  const mailingAddressRef = useRef(null)
+
+  useEffect(() => {
+    if (!initialDraft) return
+    const linkedCost = initialDraft.costId ? costs.find((cost) => String(cost.costId) === String(initialDraft.costId)) : null
+    const linkedInvoice = initialDraft.invoiceId ? invoices.find((invoice) => Number(invoice.id) === Number(initialDraft.invoiceId)) : null
+    setPayee(initialDraft.payee || '')
+    setAmount(initialDraft.amount == null ? '' : String(initialDraft.amount))
+    setCheckDate(initialDraft.date || today())
+    setMemo(initialDraft.memo || '')
+    setCheckType(initialDraft.checkType || 'payment')
+    setDestinationAccount(initialDraft.destinationAccount || '')
+    setMailingAddress(initialDraft.mailingAddress || costMailingAddress(linkedCost) || linkedInvoice?.vendorMailingAddress || linkedInvoice?.mailingAddress || '')
+    setAttachmentTarget(initialDraft.costId ? `cost:${initialDraft.costId}` : '')
+    setLotTarget(initialDraft.lot || '')
+    if (initialDraft.templateKey && checkTemplates[initialDraft.templateKey]) {
+      setTemplateKey(initialDraft.templateKey)
+      setAccountLabel(initialDraft.accountLabel || checkTemplates[initialDraft.templateKey].accountLabel)
+    }
+    const source = initialDraft.costId ? 'saved cost' : initialDraft.invoiceId ? 'invoice' : 'payment request'
+    setMessage({ type: 'success', text: `Check details were filled from the ${source}. Enter the preprinted check number and review before saving.` })
+    onInitialDraftApplied?.()
+  }, [costs, initialDraft, invoices, onInitialDraftApplied])
 
   const sortedChecks = useMemo(() => [...checks].sort((a, b) => (
     String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id)
@@ -201,7 +257,7 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
     const totals = {}
     loanDraws.forEach((draw) => { totals[draw.id] = draw.amount })
     checks.forEach((check) => {
-      if (check.status === 'voided' || check.fundedByIncomeId == null) return
+      if (check.status === 'voided' || check.checkType === 'internal_transfer' || check.fundedByIncomeId == null) return
       if (totals[check.fundedByIncomeId] != null) totals[check.fundedByIncomeId] -= check.amount
     })
     return totals
@@ -219,8 +275,106 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
     return { invoiceId: null, costId: null }
   }
 
-  const checkTargetValue = (check) => check.invoiceId ? `invoice:${check.invoiceId}` : (check.costId ? `cost:${check.costId}` : '')
-  const previewData = viewingCheck || { checkNumber, payee, amount, date: checkDate, memo, accountLabel, templateKey, status: 'draft', ...parseAccountingTarget(attachmentTarget) }
+  const checkTargetValue = (check) => check.checkType === 'internal_transfer' ? '' : (check.invoiceId ? `invoice:${check.invoiceId}` : (check.costId ? `cost:${check.costId}` : ''))
+  const documentsForTarget = (value) => {
+    const { invoiceId, costId } = parseAccountingTarget(value)
+    if (invoiceId) return invoices.find((entry) => Number(entry.id) === Number(invoiceId))?.attachments || []
+    if (costId) return costs.find((entry) => String(entry.costId) === String(costId))?.attachments?.filter((entry) => entry?.storagePath) || []
+    return []
+  }
+  const filteredChecks = useMemo(() => sortedChecks.filter((check) => {
+    const target = checkTargetValue(check)
+    const targetText = accountingTargets.find((entry) => entry.value === target)?.label || ''
+    const searchText = `${check.checkNumber || ''} ${check.payee || ''} ${check.memo || ''} ${check.accountLabel || ''} ${check.destinationAccount || ''} ${targetText}`.toLowerCase()
+    const normalizedSearch = registerSearch.trim().toLowerCase()
+    const hasLink = Boolean(check.invoiceId || check.costId)
+    const hasDocument = documentsForTarget(target).length > 0
+    return (!normalizedSearch || searchText.includes(normalizedSearch))
+      && (registerStatus === 'all' || check.status === registerStatus)
+      && (registerLot === 'all' || (registerLot === 'unassigned' ? !check.lot : check.lot === registerLot))
+      && (registerLink === 'all'
+        || (registerLink === 'linked' && hasLink)
+        || (registerLink === 'unlinked' && !hasLink && check.checkType !== 'internal_transfer')
+        || (registerLink === 'invoice' && Boolean(check.invoiceId))
+        || (registerLink === 'cost' && Boolean(check.costId))
+        || (registerLink === 'missing_document' && check.checkType !== 'internal_transfer' && !hasDocument))
+      && (registerDraw === 'all'
+        || (registerDraw === 'unfunded' ? check.fundedByIncomeId == null : String(check.fundedByIncomeId) === registerDraw))
+      && (!registerDateFrom || String(check.date || '') >= registerDateFrom)
+      && (!registerDateTo || String(check.date || '') <= registerDateTo)
+  }), [accountingTargets, costs, invoices, registerDateFrom, registerDateTo, registerDraw, registerLink, registerLot, registerSearch, registerStatus, sortedChecks])
+
+  const registerTotal = useMemo(() => filteredChecks
+    .filter((check) => check.status !== 'voided' && check.checkType !== 'internal_transfer')
+    .reduce((sum, check) => sum + Number(check.amount || 0), 0), [filteredChecks])
+
+  const constructionCoverage = useMemo(() => {
+    const parentIds = new Set(costs.map((cost) => String(cost.parentCostId || '')).filter(Boolean))
+    return costs
+      .filter((cost) => cost.phase === 'construction' && !parentIds.has(String(cost.costId)))
+      .map((cost) => {
+        const relatedInvoices = invoices.filter((invoice) => String(invoice.costId || '') === String(cost.costId))
+        const documents = [
+          ...(cost.attachments || []).filter((attachment) => attachment?.storagePath),
+          ...relatedInvoices.flatMap((invoice) => invoice.attachments || []),
+        ]
+        const invoiceIds = new Set(relatedInvoices.map((invoice) => String(invoice.id)))
+        const activeChecks = checks.filter((check) => check.status !== 'voided' && check.checkType !== 'internal_transfer' && (
+          String(check.costId || '') === String(cost.costId) || invoiceIds.has(String(check.invoiceId || ''))
+        ))
+        const paid = activeChecks.reduce((sum, check) => sum + Number(check.amount || 0), 0)
+        return { cost, relatedInvoices, documents, activeChecks, paid, hasInvoice: documents.length > 0 }
+      })
+      .sort((left, right) => String(right.cost.date || '').localeCompare(String(left.cost.date || '')) || left.cost.name.localeCompare(right.cost.name))
+  }, [checks, costs, invoices])
+
+  const visibleConstructionCoverage = useMemo(() => constructionCoverage.filter((entry) => (
+    constructionCoverageFilter === 'all'
+      || (constructionCoverageFilter === 'missing_invoice' && !entry.hasInvoice)
+      || (constructionCoverageFilter === 'with_invoice' && entry.hasInvoice)
+      || (constructionCoverageFilter === 'unpaid' && entry.paid + 0.009 < Number(entry.cost.amount || 0))
+      || (constructionCoverageFilter === 'paid' && entry.paid + 0.009 >= Number(entry.cost.amount || 0))
+  )), [constructionCoverage, constructionCoverageFilter])
+
+  const constructionCoverageTotals = useMemo(() => ({
+    total: constructionCoverage.reduce((sum, entry) => sum + Number(entry.cost.amount || 0), 0),
+    invoiceDocumented: constructionCoverage.filter((entry) => entry.hasInvoice).reduce((sum, entry) => sum + Number(entry.cost.amount || 0), 0),
+    paid: constructionCoverage.reduce((sum, entry) => sum + Math.min(Number(entry.cost.amount || 0), entry.paid), 0),
+    missingInvoice: constructionCoverage.filter((entry) => !entry.hasInvoice).length,
+  }), [constructionCoverage])
+
+  const clearRegisterFilters = () => {
+    setRegisterSearch('')
+    setRegisterStatus('all')
+    setRegisterLot('all')
+    setRegisterLink('all')
+    setRegisterDraw('all')
+    setRegisterDateFrom('')
+    setRegisterDateTo('')
+  }
+  const vendorNameForTarget = (value) => {
+    const { invoiceId, costId } = parseAccountingTarget(value)
+    if (invoiceId) return invoices.find((entry) => Number(entry.id) === Number(invoiceId))?.vendorName || payee.trim()
+    if (costId) {
+      const cost = costs.find((entry) => String(entry.costId) === String(costId))
+      return (cost?.attachments || []).find((entry) => entry.vendor)?.vendor || payee.trim()
+    }
+    return payee.trim()
+  }
+  const previewTargetDocument = (value) => {
+    const [document] = documentsForTarget(value)
+    if (!document || !onOpenDocument) return
+    onOpenDocument(document)
+  }
+  const selectedDocuments = documentsForTarget(attachmentTarget)
+  const activeTargetChecks = attachmentTarget ? sortedChecks.filter((savedCheck) => (
+    savedCheck.id !== editingCheckId
+    && savedCheck.status !== 'voided'
+    && checkTargetValue(savedCheck) === attachmentTarget
+  )) : []
+  const previewData = viewingCheck || { checkNumber, payee, amount, date: checkDate, memo, accountLabel, templateKey, checkType, destinationAccount, status: 'draft', ...parseAccountingTarget(attachmentTarget) }
+  const checkNumberWasChanged = Boolean(editingCheckId && originalCheckNumber && checkNumber.trim() !== originalCheckNumber.trim())
+  const editingCheckWasVoided = sortedChecks.some((check) => check.id === editingCheckId && check.status === 'voided')
   const previewTarget = accountingTargets.find((target) => target.value === checkTargetValue(previewData))
   const previewTemplate = checkTemplates[previewData.templateKey] || checkTemplates.bofa
 
@@ -230,11 +384,17 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
     setAmount('')
     setCheckDate(today())
     setMemo('')
+    setMailingAddress('')
+    setCheckType('payment')
+    setDestinationAccount('')
+    setEditingCheckId(null)
+    setOriginalCheckNumber('')
     setAttachmentTarget('')
     setFundingTarget('')
     setLotTarget('')
     setTemplateKey('bofa')
     setAccountLabel(checkTemplates.bofa.accountLabel)
+    setAllowAdditionalCheck(false)
   }
 
   const saveCheck = async (event) => {
@@ -243,31 +403,44 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
     const numericAmount = Number(amount)
     const normalizedCheckNumber = checkNumber.trim()
     if (!normalizedCheckNumber) return setMessage({ type: 'error', text: 'Enter the number printed on the check.' })
-    if (sortedChecks.some((check) => String(check.checkNumber).trim().toLowerCase() === normalizedCheckNumber.toLowerCase())) {
+    if (sortedChecks.some((check) => check.id !== editingCheckId && String(check.checkNumber).trim().toLowerCase() === normalizedCheckNumber.toLowerCase())) {
       return setMessage({ type: 'error', text: `Check #${normalizedCheckNumber} is already saved for ${project.name}. Open it in the check register to view or reprint it, or enter a different preprinted check number.` })
     }
     if (!payee.trim()) return setMessage({ type: 'error', text: 'Enter the person or company being paid.' })
-    if (!Number.isFinite(numericAmount) || numericAmount <= 0) return setMessage({ type: 'error', text: 'Enter a check amount greater than $0.' })
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) return setMessage({ type: 'error', text: 'Enter a check amount greater than $0.00.' })
     if (!checkDate) return setMessage({ type: 'error', text: 'Select the check date.' })
     if (!accountLabel.trim()) return setMessage({ type: 'error', text: 'Enter a safe account label, such as Bank of America Operating.' })
-    if (!onSaveCheck) return setMessage({ type: 'error', text: 'Check saving is unavailable. Sign in and select a project.' })
+    if (checkType === 'internal_transfer' && !destinationAccount.trim()) return setMessage({ type: 'error', text: 'Enter the Green Fort account receiving this transfer.' })
+    if (checkType === 'internal_transfer' && destinationAccount.trim().toLowerCase() === accountLabel.trim().toLowerCase()) return setMessage({ type: 'error', text: 'The source and destination accounts must be different.' })
+    if (checkType !== 'internal_transfer' && activeTargetChecks.length && !allowAdditionalCheck) {
+      return setMessage({ type: 'error', text: `${activeTargetChecks.length} active check${activeTargetChecks.length === 1 ? ' is' : 's are'} already attached to this cost or invoice. Confirm that this is an intentional additional or partial payment before saving another check.` })
+    }
+    if (editingCheckId ? !onUpdateCheck : !onSaveCheck) return setMessage({ type: 'error', text: 'Check saving is unavailable. Sign in and select a project.' })
     setSaving(true)
     try {
-      const saved = await onSaveCheck({
+      const payload = {
         projectId: project.id,
         checkNumber: normalizedCheckNumber,
         payee: payee.trim(),
         amount: numericAmount,
         date: checkDate,
         memo: memo.trim(),
+        mailingAddress: checkType === 'internal_transfer' ? '' : mailingAddress.trim(),
         accountLabel: accountLabel.trim(),
         templateKey,
-        ...parseAccountingTarget(attachmentTarget),
-        fundedByIncomeId: fundingTarget ? Number(fundingTarget) : null,
-        lot: lotTarget || null,
-      })
+        checkType,
+        destinationAccount: checkType === 'internal_transfer' ? destinationAccount.trim() : '',
+        ...(checkType === 'internal_transfer' ? { invoiceId: null, costId: null } : parseAccountingTarget(attachmentTarget)),
+        fundedByIncomeId: checkType === 'internal_transfer' ? null : (fundingTarget ? Number(fundingTarget) : null),
+        lot: checkType === 'internal_transfer' ? null : (lotTarget || null),
+      }
+      const saved = editingCheckId
+        ? await onUpdateCheck(editingCheckId, payload)
+        : await onSaveCheck(payload)
       if (saved) setViewingCheck(saved)
-      setMessage({ type: 'success', text: `Check ${normalizedCheckNumber} saved. Review it in the register before printing.` })
+      setMessage({ type: 'success', text: editingCheckId
+        ? `Check ${normalizedCheckNumber} updated. Review it, then print or reprint.`
+        : `Check ${normalizedCheckNumber} saved. Review it in the register before printing.` })
       resetForm()
     } catch (error) {
       setMessage({
@@ -296,6 +469,7 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
     try {
       setPrintingTemplateSheet(false)
       setPrintingCarrierGuide(false)
+      setPrintingEnvelope(null)
       const printable = check.status === 'printed' ? check : await onUpdateStatus(check.id, 'printed')
       setPrintingCheck(printable)
       if (viewingCheck?.id === check.id) setViewingCheck(printable)
@@ -309,6 +483,7 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
     setMessage(null)
     setPrintingTemplateSheet(false)
     setPrintingCarrierGuide(false)
+    setPrintingEnvelope(null)
     setPrintingCheck({
       id: 'mock-alignment-check',
       checkNumber: checkNumber.trim() || 'TEST',
@@ -327,6 +502,7 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
     setMessage(null)
     setPrintingCheck(null)
     setPrintingCarrierGuide(false)
+    setPrintingEnvelope(null)
     setPrintingTemplateSheet(true)
     window.setTimeout(() => window.print(), 0)
   }
@@ -335,23 +511,42 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
     setMessage(null)
     setPrintingCheck(null)
     setPrintingTemplateSheet(false)
+    setPrintingEnvelope(null)
     setPrintingCarrierGuide(true)
     window.setTimeout(() => window.print(), 0)
   }
 
   const voidCheck = async (check) => {
+    setPendingVoidCheckId(null)
     setMessage(null)
     try {
       const saved = await onUpdateStatus(check.id, 'voided')
       if (viewingCheck?.id === check.id && saved) setViewingCheck(saved)
-      setMessage({ type: 'success', text: `Check ${check.checkNumber} was voided and remains in the register.` })
+      setMessage({ type: 'success', text: `Check ${check.checkNumber} was voided and remains in the register. Its linked cost is now treated as unpaid.` })
     } catch (error) {
       setMessage({ type: 'error', text: `The check could not be voided: ${errorMessage(error)}` })
     }
   }
 
+  const confirmVoidedReprint = async (check) => {
+    setPendingVoidedReprintId(null)
+    await printCheck(check)
+  }
+
+  const changePayee = (nextPayee) => {
+    setPayee(nextPayee)
+    if (nextPayee.trim().toLowerCase().replace(/[^a-z0-9]/g, '') === 'greenfortllc') {
+      setCheckType('internal_transfer')
+      setAttachmentTarget('')
+      setFundingTarget('')
+      setLotTarget('')
+      setMailingAddress('')
+      setEnvelopeSetupNeeded(false)
+    }
+  }
+
   const selectPayee = (savedPayee) => {
-    setPayee(savedPayee.name)
+    changePayee(savedPayee.name)
     if (savedPayee.accountLabel) setAccountLabel(savedPayee.accountLabel)
     if (savedPayee.templateKey && checkTemplates[savedPayee.templateKey]) setTemplateKey(savedPayee.templateKey)
   }
@@ -458,6 +653,239 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
     }
   }
 
+  const changeAccountingTarget = (value) => {
+    setAttachmentTarget(value)
+    const { invoiceId, costId } = parseAccountingTarget(value)
+    if (invoiceId) {
+      const invoice = invoices.find((entry) => Number(entry.id) === invoiceId)
+      if (!payee.trim() && invoice?.vendorName) setPayee(invoice.vendorName)
+      if (!memo.trim()) setMemo(invoiceMemo(invoice))
+      if (!mailingAddress.trim() && (invoice?.vendorMailingAddress || invoice?.mailingAddress)) setMailingAddress(invoice.vendorMailingAddress || invoice.mailingAddress)
+    } else if (costId) {
+      const cost = costs.find((entry) => String(entry.costId) === String(costId))
+      const attachment = (cost?.attachments || []).find((entry) => entry.vendor)
+      if (!payee.trim() && attachment?.vendor) setPayee(attachment.vendor)
+      if (!memo.trim()) setMemo(costMemo(cost))
+      if (!mailingAddress.trim()) setMailingAddress(costMailingAddress(cost))
+    }
+  }
+
+  const addAddressFromInvoice = async () => {
+    const { invoiceId, costId } = parseAccountingTarget(attachmentTarget)
+    let address = ''
+    if (invoiceId) {
+      const invoice = invoices.find((entry) => Number(entry.id) === invoiceId)
+      address = invoice?.vendorMailingAddress || invoice?.mailingAddress || ''
+    } else if (costId) {
+      address = costMailingAddress(costs.find((entry) => String(entry.costId) === String(costId)))
+    }
+    if (!invoiceId && !costId) {
+      setMessage({ type: 'error', text: 'Attach this check to an invoice or invoice cost first.' })
+      return
+    }
+    if (!address && onExtractVendorAddress) {
+      const [document] = documentsForTarget(attachmentTarget)
+      if (document) {
+        setExtractingVendorAddress(true)
+        setMessage({ type: 'success', text: 'Reading the vendor mailing address from the attached invoice…' })
+        try {
+          address = await onExtractVendorAddress(document, vendorNameForTarget(attachmentTarget))
+        } catch (error) {
+          setMessage({ type: 'error', text: `The invoice address could not be analyzed: ${errorMessage(error)}` })
+          return
+        } finally {
+          setExtractingVendorAddress(false)
+        }
+      }
+    }
+    if (!address) {
+      setMessage({ type: 'error', text: 'No vendor/remittance mailing address was found on the attached invoice. Enter the To address manually and review it before printing.' })
+      return
+    }
+    setMailingAddress(address)
+    const vendorName = vendorNameForTarget(attachmentTarget)
+    if (onSaveVendorAddress && vendorName) {
+      try {
+        await onSaveVendorAddress({ name: vendorName, mailingAddress: address })
+        setMessage({ type: 'success', text: 'The vendor mailing address was added from the invoice and saved for future envelopes. Review it before printing.' })
+        return
+      } catch (error) {
+        setMessage({ type: 'error', text: `The address was added to this check but could not be saved to the vendor address book: ${errorMessage(error)}` })
+        return
+      }
+    }
+    setMessage({ type: 'success', text: 'The vendor mailing address was added from the invoice. Review it before printing.' })
+  }
+
+  const saveCurrentVendorAddress = async () => {
+    if (!payee.trim() || !mailingAddress.trim()) {
+      setMessage({ type: 'error', text: 'Enter both the payee and mailing address before saving it to the address book.' })
+      return
+    }
+    if (!onSaveVendorAddress) {
+      setMessage({ type: 'error', text: 'The vendor address book is unavailable. Sign in and retry.' })
+      return
+    }
+    try {
+      await onSaveVendorAddress({ name: payee.trim(), mailingAddress: mailingAddress.trim() })
+      setMessage({ type: 'success', text: `${payee.trim()} was saved to the vendor address book for future envelopes.` })
+    } catch (error) {
+      setMessage({ type: 'error', text: `The vendor address could not be saved: ${errorMessage(error)}` })
+    }
+  }
+
+  const selectSavedVendorAddress = (vendorId) => {
+    const vendor = vendorAddresses.find((entry) => String(entry.id) === String(vendorId))
+    if (!vendor) return
+    setPayee(vendor.name)
+    setMailingAddress(vendor.mailingAddress)
+    setMessage({ type: 'success', text: `${vendor.name}'s saved mailing address is ready for the envelope.` })
+  }
+
+  const importVendorAddresses = async () => {
+    if (!onImportVendorAddresses) return
+    setImportingVendorAddresses(true)
+    setMessage({ type: 'success', text: 'Reading vendor addresses from the project invoices…' })
+    try {
+      const result = await onImportVendorAddresses()
+      setMessage({ type: 'success', text: `Address import complete: ${result.imported} address${result.imported === 1 ? '' : 'es'} found across ${result.reviewed} attached invoice${result.reviewed === 1 ? '' : 's'} and saved for future envelopes.` })
+    } catch (error) {
+      setMessage({ type: 'error', text: `Vendor addresses could not be imported: ${errorMessage(error)}` })
+    } finally {
+      setImportingVendorAddresses(false)
+    }
+  }
+
+  const mailingAddressForCheck = (check) => {
+    if (check?.mailingAddress) return check.mailingAddress
+    if (check?.invoiceId) {
+      const invoice = invoices.find((entry) => Number(entry.id) === Number(check.invoiceId))
+      if (invoice?.vendorMailingAddress || invoice?.mailingAddress) return invoice.vendorMailingAddress || invoice.mailingAddress
+    }
+    if (check?.costId) return costMailingAddress(costs.find((entry) => String(entry.costId) === String(check.costId)))
+    return ''
+  }
+
+  const editSavedCheck = (check) => {
+    setEditingCheckId(check.id)
+    setOriginalCheckNumber(String(check.checkNumber || ''))
+    setCheckNumber(String(check.checkNumber || ''))
+    setPayee(check.payee || '')
+    setAmount(check.amount == null ? '' : String(check.amount))
+    setCheckDate(check.date || today())
+    setMemo(check.memo || '')
+    setCheckType(check.checkType || 'payment')
+    setDestinationAccount(check.destinationAccount || '')
+    setMailingAddress(check.checkType === 'internal_transfer' ? '' : mailingAddressForCheck(check))
+    setAccountLabel(check.accountLabel || checkTemplates[check.templateKey || 'bofa']?.accountLabel || '')
+    setTemplateKey(check.templateKey || 'bofa')
+    setAttachmentTarget(check.checkType === 'internal_transfer' ? '' : checkTargetValue(check))
+    setFundingTarget(check.checkType === 'internal_transfer' ? '' : (check.fundedByIncomeId ? String(check.fundedByIncomeId) : ''))
+    setLotTarget(check.checkType === 'internal_transfer' ? '' : (check.lot || ''))
+    setViewingCheck(null)
+    setMessage({ type: 'success', text: `Editing saved check ${check.checkNumber}. Save changes before reprinting.` })
+  }
+
+  const openEnvelopeSetup = (check = null, reason = 'missing') => {
+    if (check) editSavedCheck(check)
+    setEnvelopeSetupNeeded(true)
+    setMessage({
+      type: 'error',
+      text: reason === 'unattached'
+        ? 'No invoice is attached to this check. Attach one now so its vendor address can be read, or enter the payee address manually.'
+        : 'The attached invoice does not contain a readable vendor mailing address. Enter it manually, or attach a different invoice.',
+    })
+    window.setTimeout(() => mailingAddressRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' }), 0)
+  }
+
+  const printEnvelope = async (check = null) => {
+    if ((check?.checkType || checkType) === 'internal_transfer') {
+      setMessage({ type: 'error', text: 'Internal account transfers do not use vendor envelopes.' })
+      return
+    }
+    const targetValue = check ? checkTargetValue(check) : attachmentTarget
+    const envelope = check
+      ? { ...check, mailingAddress: mailingAddressForCheck(check) }
+      : { payee, mailingAddress }
+    if (!String(envelope.payee || '').trim()) {
+      setMessage({ type: 'error', text: 'Enter the payee before printing an envelope.' })
+      return
+    }
+
+    let resolvedAddress = String(envelope.mailingAddress || '').trim()
+    if (targetValue) {
+      const { invoiceId, costId } = parseAccountingTarget(targetValue)
+      if (invoiceId) {
+        const invoice = invoices.find((entry) => Number(entry.id) === Number(invoiceId))
+        resolvedAddress = String(invoice?.vendorMailingAddress || invoice?.mailingAddress || resolvedAddress).trim()
+      } else if (costId) {
+        resolvedAddress = String(costMailingAddress(costs.find((entry) => String(entry.costId) === String(costId))) || resolvedAddress).trim()
+      }
+
+      if (!resolvedAddress && onExtractVendorAddress) {
+        const [document] = documentsForTarget(targetValue)
+        if (document) {
+          setPreparingEnvelope(true)
+          setMessage({ type: 'success', text: 'Reading the vendor mailing address from the attached invoice…' })
+          try {
+            resolvedAddress = String(await onExtractVendorAddress(document, vendorNameForTarget(targetValue)) || '').trim()
+          } catch (error) {
+            setMessage({ type: 'error', text: `The invoice address could not be analyzed: ${errorMessage(error)}` })
+          } finally {
+            setPreparingEnvelope(false)
+          }
+        }
+      }
+    }
+
+    if (!resolvedAddress) {
+      openEnvelopeSetup(check, targetValue ? 'missing' : 'unattached')
+      return
+    }
+    if (!check) setMailingAddress(resolvedAddress)
+    setEnvelopeSetupNeeded(false)
+    setMessage(null)
+    setPrintingCheck(null)
+    setPrintingTemplateSheet(false)
+    setPrintingCarrierGuide(false)
+    setPrintingEnvelope({ payee: envelope.payee.trim(), mailingAddress: resolvedAddress })
+    window.setTimeout(() => window.print(), 0)
+  }
+
+  const printPaidInvoice = (check = null) => {
+    if ((check?.checkType || checkType) === 'internal_transfer') {
+      setMessage({ type: 'error', text: 'Internal account transfers are not vendor costs and do not have paid invoices.' })
+      return
+    }
+    const targetValue = check ? checkTargetValue(check) : attachmentTarget
+    const [document] = documentsForTarget(targetValue)
+    if (!targetValue) {
+      openEnvelopeSetup(check, 'unattached')
+      setMessage({ type: 'error', text: 'Attach an invoice before printing a paid copy to include with the envelope.' })
+      window.setTimeout(() => attachmentSelectRef.current?.focus(), 0)
+      return
+    }
+    if (!document) {
+      setMessage({ type: 'error', text: 'The selected invoice does not have a printable attachment. Attach the invoice file, then try again.' })
+      return
+    }
+    if (!onPrintPaidInvoice) {
+      setMessage({ type: 'error', text: 'Paid invoice printing is unavailable. Sign in and retry.' })
+      return
+    }
+    setPrintingCheck(null)
+    setPrintingTemplateSheet(false)
+    setPrintingCarrierGuide(false)
+    setPrintingEnvelope(null)
+    const source = check || { checkNumber, date: checkDate, payee, amount }
+    onPrintPaidInvoice(document, {
+      checkNumber: String(source.checkNumber || '').trim(),
+      date: source.date || '',
+      payee: String(source.payee || '').trim(),
+      amount: Number(source.amount) > 0 ? currency.format(Number(source.amount)) : '',
+    })
+  }
+
   const viewSavedCheck = (check) => {
     setViewingCheck(check)
     previewPanelRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
@@ -465,6 +893,10 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
 
   const carrierLeftMarginIn = 1.25 + (Number(horizontalOffset) || 0)
   const carrierTopMarginIn = 1 + (Number(verticalOffset) || 0)
+  const envelopePreview = viewingCheck
+    ? { payee: viewingCheck.payee || '', mailingAddress: mailingAddressForCheck(viewingCheck) }
+    : { payee, mailingAddress }
+  const envelopeAddressLines = String(envelopePreview.mailingAddress || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
 
   return <>
     <section className="section-grid check-printing-layout">
@@ -521,42 +953,112 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
           <button type="button" className="secondary-button" onClick={printCalibrationSheet}>Print BOFA + Flagstar templates</button>
         </div>
         <form className="owner-form check-form" noValidate onSubmit={saveCheck}>
+          {editingCheckWasVoided ? <p className="voided-check-edit-warning wide-field"><strong>This check is voided.</strong> You may edit and save it, but it stays voided until you explicitly confirm reprinting. Reprinting changes its register status to Printed.</p> : null}
           <label className="wide-field">Preprinted check template
             <select aria-label="Check template" value={templateKey} onChange={(event) => changeTemplate(event.target.value)}>
               <option value="bofa">Bank of America — default</option>
               <option value="providence">Providence Bank</option>
             </select>
           </label>
-          <label>Check number<input aria-label="Check number" value={checkNumber} onChange={(event) => setCheckNumber(event.target.value)} /></label>
-          <label>Check date<input aria-label="Check date" type="date" value={checkDate} onChange={(event) => setCheckDate(event.target.value)} /></label>
-          <label className="wide-field">Pay to the order of<input aria-label="Check payee" list="learned-check-payees" value={payee} onChange={(event) => setPayee(event.target.value)} /></label>
+          <label>Check number
+            <input aria-label="Check number" value={checkNumber} onChange={(event) => setCheckNumber(event.target.value)} />
+            {checkNumberWasChanged ? <small className="check-number-change-warning" aria-live="polite"><strong>Check number changed:</strong> originally #{originalCheckNumber}. Confirm the new number matches the physical preprinted check before saving or reprinting.</small> : null}
+          </label>
+          <label>Check date<input aria-label="Check date" type="date" value={checkDate} onChange={(event) => setCheckDate(event.target.value)} /><small>Defaults to the check creation date. You can change it before saving.</small></label>
+          <label className="wide-field">Pay to the order of<input aria-label="Check payee" list="learned-check-payees" value={payee} onChange={(event) => changePayee(event.target.value)} /></label>
           <datalist id="learned-check-payees">{frequentPayees.map((savedPayee) => <option key={savedPayee.name} value={savedPayee.name}>{savedPayee.count} previous check{savedPayee.count === 1 ? '' : 's'}</option>)}</datalist>
           {frequentPayees.length ? <div className="frequent-payees wide-field"><span>Frequent payees</span><div className="button-row">{frequentPayees.slice(0, 5).map((savedPayee) => <button key={savedPayee.name} type="button" className="secondary-button" onClick={() => selectPayee(savedPayee)}>{savedPayee.name} <small>{savedPayee.count}×</small></button>)}</div></div> : null}
           <label>Amount<input aria-label="Check amount" type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
           <label>Account label<input aria-label="Check account label" value={accountLabel} onChange={(event) => setAccountLabel(event.target.value)} /></label>
-          <label className="wide-field">Memo<input aria-label="Check memo" value={memo} onChange={(event) => setMemo(event.target.value)} /></label>
-          <label className="wide-field">Attach this check to
-            <select aria-label="Check accounting attachment" value={attachmentTarget} onChange={(event) => setAttachmentTarget(event.target.value)}>
+          <label className="wide-field">Check purpose
+            <select aria-label="Check purpose" value={checkType} onChange={(event) => {
+              const nextType = event.target.value
+              setCheckType(nextType)
+              if (nextType === 'internal_transfer') {
+                setAttachmentTarget('')
+                setFundingTarget('')
+                setLotTarget('')
+                setMailingAddress('')
+                setEnvelopeSetupNeeded(false)
+              }
+            }}>
+              <option value="payment">Vendor or outside payment — counts as a cost/payment</option>
+              <option value="internal_transfer">Transfer between Green Fort bank accounts — not a cost</option>
+            </select>
+          </label>
+          {checkType === 'internal_transfer' ? <>
+            <label className="wide-field">Transfer to account
+              <input aria-label="Transfer destination account" list="greenfort-bank-accounts" value={destinationAccount} onChange={(event) => setDestinationAccount(event.target.value)} placeholder="Bank of America" />
+              <small>Use a safe bank/account label only—never enter a full account or routing number.</small>
+            </label>
+            <datalist id="greenfort-bank-accounts"><option value="Bank of America" /><option value="Providence Bank" /><option value="Flagstar Bank" /></datalist>
+            <div className="internal-transfer-notice wide-field" role="status"><strong>Internal transfer · not a project cost</strong><span>This check stays in the audit register but cannot be attached to an invoice, cost, draw, lot, vendor envelope, or paid-invoice copy.</span></div>
+          </> : null}
+          <label className="wide-field">Memo<input aria-label="Check memo" value={memo} onChange={(event) => setMemo(event.target.value)} /><small>Use the invoice number, work description, and lot when available.</small></label>
+          {checkType !== 'internal_transfer' && envelopeSetupNeeded ? <div className="envelope-address-choice wide-field" role="group" aria-label="Envelope address options">
+            <div><strong>Envelope address needed</strong><span>Attach an invoice to read its vendor address automatically, or type the address yourself.</span></div>
+            <div className="button-row">
+              <button type="button" className="secondary-button" onClick={() => attachmentSelectRef.current?.focus()}>Attach invoice now</button>
+              <button type="button" className="secondary-button" onClick={() => mailingAddressRef.current?.focus()}>Enter address manually</button>
+            </div>
+          </div> : null}
+          {checkType !== 'internal_transfer' ? <label className="wide-field">To: vendor address from invoice<textarea ref={mailingAddressRef} aria-label="Payee mailing address" rows="3" value={mailingAddress} onChange={(event) => setMailingAddress(event.target.value)} placeholder={'Street address\nCity, State ZIP'} /><small>Filled from the invoice’s vendor/remittance address when available. Review it before printing; never use the project or job-site address.</small></label> : null}
+          {checkType !== 'internal_transfer' && vendorAddresses.length ? <label className="wide-field">Saved vendor address
+            <select aria-label="Saved vendor address" value="" onChange={(event) => selectSavedVendorAddress(event.target.value)}>
+              <option value="">Choose a vendor for this envelope</option>
+              {vendorAddresses.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name} · {vendor.mailingAddress.replace(/\r?\n/g, ', ')}</option>)}
+            </select>
+            <small>Company-wide address book—available for future checks and envelopes.</small>
+          </label> : null}
+          {checkType !== 'internal_transfer' ? <div className="button-row wide-field invoice-address-actions">
+            <button type="button" className="secondary-button" disabled={extractingVendorAddress} onClick={addAddressFromInvoice}>{extractingVendorAddress ? 'Reading address…' : 'Add address from invoice'}</button>
+            <button type="button" className="secondary-button" onClick={saveCurrentVendorAddress}>Save vendor address</button>
+            {onImportVendorAddresses ? <button type="button" className="secondary-button" disabled={importingVendorAddresses} onClick={importVendorAddresses}>{importingVendorAddresses ? 'Importing addresses…' : 'Import addresses from invoices'}</button> : null}
+          </div> : null}
+          {checkType !== 'internal_transfer' ? <label className="wide-field">Envelope feed orientation
+            <select aria-label="Envelope feed orientation" value={envelopeRotation} onChange={(event) => setEnvelopeRotation(event.target.value)}>
+              <option value="180">Rotate 180° — fixes upside-down output (recommended)</option>
+              <option value="0">Normal orientation</option>
+            </select>
+            <small>Based on the test envelope, use Rotate 180°. Keep feeding the envelope the same way.</small>
+          </label> : null}
+          {checkType !== 'internal_transfer' ? <label className="wide-field">Attach this check to
+            <select ref={attachmentSelectRef} aria-label="Check accounting attachment" value={attachmentTarget} onChange={(event) => {
+              setAllowAdditionalCheck(false)
+              changeAccountingTarget(event.target.value)
+            }}>
               <option value="">Not attached yet</option>
               {invoices.length ? <optgroup label="Invoices">{accountingTargets.filter((target) => target.value.startsWith('invoice:')).map((target) => <option key={target.value} value={target.value}>{target.label}</option>)}</optgroup> : null}
               {costs.length ? <optgroup label="Costs and breakdowns">{accountingTargets.filter((target) => target.value.startsWith('cost:')).map((target) => <option key={target.value} value={target.value}>{target.label}</option>)}</optgroup> : null}
             </select>
-          </label>
-          {drawTargets.length ? <label className="wide-field">Funded by draw
+          </label> : null}
+          {checkType !== 'internal_transfer' && activeTargetChecks.length ? <div className="duplicate-check-warning wide-field" role="alert">
+            <div><strong>Possible duplicate payment</strong><span>{activeTargetChecks.map((savedCheck) => `Check #${savedCheck.checkNumber} (${currency.format(savedCheck.amount)}, ${savedCheck.status})`).join(' · ')} is already attached.</span></div>
+            <label><input type="checkbox" checked={allowAdditionalCheck} onChange={(event) => setAllowAdditionalCheck(event.target.checked)} /> Allow another check for a partial or additional payment</label>
+          </div> : null}
+          {checkType !== 'internal_transfer' && selectedDocuments.length && onOpenDocument ? <div className="button-row wide-field check-invoice-preview-action">
+            <button type="button" className="secondary-button" onClick={() => previewTargetDocument(attachmentTarget)}>Preview attached invoice{selectedDocuments.length > 1 ? ` (${selectedDocuments.length})` : ''}</button>
+            <small>Opens inside the app without downloading.</small>
+          </div> : null}
+          {checkType !== 'internal_transfer' && drawTargets.length ? <label className="wide-field">Funded by draw
             <select aria-label="Check draw funding" value={fundingTarget} onChange={(event) => setFundingTarget(event.target.value)}>
               <option value="">Not funded by a draw</option>
               {drawTargets.map((target) => <option key={target.value} value={target.value}>{target.label}</option>)}
             </select>
           </label> : null}
-          <label className="wide-field">Which lot is this for
+          {checkType !== 'internal_transfer' ? <label className="wide-field">Which lot is this for
             <select aria-label="Check job lot" value={lotTarget} onChange={(event) => setLotTarget(event.target.value)}>
               <option value="">Not lot-specific</option>
               {jobLots.map((lot) => <option key={lot} value={lot}>{lot}</option>)}
             </select>
-          </label>
+          </label> : null}
           {amount && Number(amount) > 0 ? <div className="check-words-preview wide-field"><span>Amount in words</span><strong>{amountToCheckWords(amount)}</strong></div> : null}
           {message ? <p className={message.type === 'error' ? 'validation-error wide-field' : 'wide-field'} role={message.type === 'error' ? 'alert' : 'status'}>{message.text}</p> : null}
-          <button type="submit" className="action-button wide-field" disabled={saving}>{saving ? 'Saving…' : 'Save check to register'}</button>
+          <div className="button-row wide-field">
+            <button type="submit" className="action-button" disabled={saving}>{saving ? 'Saving…' : (editingCheckId ? 'Update saved check' : 'Save check to register')}</button>
+            {checkType !== 'internal_transfer' ? <button type="button" className="secondary-button" disabled={preparingEnvelope} onClick={() => printEnvelope()}>{preparingEnvelope ? 'Reading invoice address…' : 'Print 9 × 4 envelope'}</button> : null}
+            {editingCheckId ? <button type="button" className="secondary-button" onClick={resetForm}>Cancel editing</button> : null}
+          </div>
         </form>
       </div>
 
@@ -565,15 +1067,25 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
           <div><p className="eyebrow">{viewingCheck ? 'Saved check' : 'Live preview'}</p><h2>{viewingCheck ? `Check #${viewingCheck.checkNumber}` : `${previewTemplate.label} · 6 × 2.7`}</h2></div>
           {viewingCheck ? <button type="button" className="secondary-button" onClick={() => setViewingCheck(null)}>Back to current draft</button> : null}
         </div>
-        <p className="hero-copy">{viewingCheck ? `Saved ${viewingCheck.date} · ${viewingCheck.status}${previewTarget ? ` · ${previewTarget.label}` : ' · Not attached'}` : 'The preview updates while you type. Shaded text represents information already printed on the check stock.'}</p>
+        <p className="hero-copy">{viewingCheck ? `Saved ${viewingCheck.date} · ${viewingCheck.status}${viewingCheck.checkType === 'internal_transfer' ? ' · Internal transfer, not a cost' : (previewTarget ? ` · ${previewTarget.label}` : ' · Not attached')}` : 'The preview updates while you type. Shaded text represents information already printed on the check stock.'}</p>
         {viewingCheck ? <label className="saved-check-template-control">Template for this saved check
           <select aria-label={`Template for saved check ${viewingCheck.checkNumber}`} value={viewingCheck.templateKey || 'bofa'} disabled={updatingTemplate} onChange={(event) => changeSavedTemplate(event.target.value)}>
             <option value="bofa">Bank of America</option>
             <option value="providence">Providence Bank</option>
           </select>
         </label> : null}
+        {viewingCheck ? <div className="button-row saved-check-actions">
+          <button type="button" className="secondary-button" onClick={() => editSavedCheck(viewingCheck)}>Edit saved check</button>
+          {viewingCheck.checkType !== 'internal_transfer' ? <button type="button" className="secondary-button" onClick={() => printEnvelope(viewingCheck)}>Print 9 × 4 envelope</button> : null}
+          {viewingCheck.status === 'voided' && pendingVoidedReprintId !== viewingCheck.id ? <button type="button" className="secondary-button" onClick={() => setPendingVoidedReprintId(viewingCheck.id)}>Reprint voided check</button> : null}
+        </div> : null}
+        {viewingCheck?.status === 'voided' && pendingVoidedReprintId === viewingCheck.id ? <div className="voided-reprint-warning">
+          <strong>Reprint voided check #{viewingCheck.checkNumber}?</strong>
+          <span>This will reactivate it and change its register status from Voided to Printed.</span>
+          <div className="button-row"><button type="button" className="danger-button" onClick={() => confirmVoidedReprint(viewingCheck)}>Confirm reprint</button><button type="button" className="secondary-button" onClick={() => setPendingVoidedReprintId(null)}>Cancel</button></div>
+        </div> : null}
         <div className={`live-check-preview ${previewData.templateKey || 'bofa'}`} aria-label={viewingCheck ? `Saved check preview ${viewingCheck.checkNumber}` : 'Live check preview'}>
-          <div className="preview-company"><strong>Green Fort LLC</strong><span>200 Ross Bluff Ct</span><span>Holly Springs, NC 27540-6040</span></div>
+          <div className="preview-company"><strong>Green Fort LLC</strong><span>200 Rosa Bluff Ct</span><span>Holly Springs, NC 27540</span></div>
           <strong className="preview-check-number">{displayCheckNumber(previewData.checkNumber, viewingCheck ? '' : '###')}</strong>
           <div className="preview-date-line" style={previewFieldStyle('date', fieldOffsets, previewData.templateKey || 'bofa')}><span className="entered">{checkDateParts(previewData.date).prefix}</span><span>20</span><span className="entered year">{checkDateParts(previewData.date).year}</span></div>
           <span className="preview-pay-label">{previewData.templateKey === 'providence' ? <>PAY TO THE<br />ORDER OF</> : <>Pay to the<br />Order of</>}</span>
@@ -588,40 +1100,136 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
           <span className="preview-micr">⑆ ROUTING MASKED ⑆ ACCOUNT MASKED ⑈</span>
         </div>
         <div className="check-preview-key"><span><i /> Preprinted</span><span><i className="entered" /> Added by Greenfort Accountant</span></div>
+        {previewData.checkType !== 'internal_transfer' ? <section className="envelope-screen-preview-section" aria-label={`Envelope preview for ${envelopePreview.payee || 'current check'}`}>
+          <div className="envelope-screen-preview-header">
+            <div>
+              <p className="eyebrow">Envelope preview</p>
+              <h3>9 × 4 envelope</h3>
+            </div>
+            <div className="button-row">
+              <button type="button" className="secondary-button" onClick={() => printPaidInvoice(viewingCheck)}>Print invoice marked PAID</button>
+              <button type="button" className="action-button" disabled={!envelopePreview.payee.trim() || preparingEnvelope} onClick={() => printEnvelope(viewingCheck)}>
+                {preparingEnvelope ? 'Reading invoice address…' : (envelopeAddressLines.length ? 'Print this envelope' : 'Prepare envelope')}
+              </button>
+            </div>
+          </div>
+          <div className="envelope-screen-preview">
+            <address className="envelope-screen-return-address">
+              <strong>Green Fort LLC</strong>
+              <span>200 Rosa Bluff Ct</span>
+              <span>Holly Springs, NC 27540</span>
+            </address>
+            <address className={`envelope-screen-recipient-address ${!envelopeAddressLines.length ? 'missing-address' : ''}`}>
+              <strong>{envelopePreview.payee || 'Payee name'}</strong>
+              {envelopeAddressLines.length
+                ? envelopeAddressLines.map((line, index) => <span key={`${line}-${index}`}>{line}</span>)
+                : <span>Payee mailing address appears here</span>}
+            </address>
+          </div>
+          {!envelopeAddressLines.length ? <p className="envelope-preview-warning">Add or retrieve the payee mailing address before printing.</p> : null}
+          <small>Preview shows address placement. Print at 100% scale on a 9 × 4-inch envelope.</small>
+        </section> : <div className="internal-transfer-notice"><strong>Internal bank transfer</strong><span>{previewData.accountLabel || 'Source account'} → {previewData.destinationAccount || 'Destination account'} · excluded from project costs and draw spending.</span></div>}
       </div>
 
+      <details className="panel construction-cost-coverage" open>
+        <summary>
+          <div><p className="eyebrow">Construction documentation</p><h2>Construction costs, invoices &amp; payments</h2></div>
+          <strong>{currency.format(constructionCoverageTotals.total)}</strong>
+        </summary>
+        <div className="construction-coverage-content">
+          <div className="construction-coverage-summary">
+            <div><span>Leaf construction costs</span><strong>{constructionCoverage.length}</strong></div>
+            <div><span>Invoice documented</span><strong>{currency.format(constructionCoverageTotals.invoiceDocumented)}</strong></div>
+            <div><span>Active checks applied</span><strong>{currency.format(constructionCoverageTotals.paid)}</strong></div>
+            <div className={constructionCoverageTotals.missingInvoice ? 'needs-attention' : ''}><span>Missing invoice file</span><strong>{constructionCoverageTotals.missingInvoice}</strong></div>
+          </div>
+          <label className="construction-coverage-filter">Show
+            <select aria-label="Filter construction invoice coverage" value={constructionCoverageFilter} onChange={(event) => setConstructionCoverageFilter(event.target.value)}>
+              <option value="all">All construction costs</option>
+              <option value="missing_invoice">Missing invoice file</option>
+              <option value="with_invoice">Invoice documented</option>
+              <option value="unpaid">Unpaid / partially paid</option>
+              <option value="paid">Fully paid</option>
+            </select>
+          </label>
+          <div className="construction-coverage-list">
+            {visibleConstructionCoverage.map(({ cost, relatedInvoices, documents, activeChecks, paid, hasInvoice }) => {
+              const costAmount = Number(cost.amount || 0)
+              const remaining = Math.max(0, costAmount - paid)
+              return <article key={cost.costId || cost.id} className={!hasInvoice ? 'missing-invoice' : ''}>
+                <div className="construction-coverage-title"><strong>{cost.name}</strong><strong>{currency.format(costAmount)}</strong></div>
+                <p>{cost.date || 'No date'} · {cost.vendorName || cost.category || 'Vendor/category not set'}{cost.lotAllocations?.length ? ` · ${cost.lotAllocations.map((allocation) => allocation.lot).join(', ')}` : ''}</p>
+                <div className="construction-coverage-badges">
+                  <span className={hasInvoice ? 'complete' : 'warning'}>{hasInvoice ? `${documents.length} invoice file${documents.length === 1 ? '' : 's'}` : 'Invoice file missing'}</span>
+                  <span>{relatedInvoices.length} invoice record{relatedInvoices.length === 1 ? '' : 's'}</span>
+                  <span>{activeChecks.length} active check{activeChecks.length === 1 ? '' : 's'} · {currency.format(paid)} paid</span>
+                  {remaining > 0.009 ? <span className="warning">{currency.format(remaining)} unpaid</span> : <span className="complete">Fully paid</span>}
+                </div>
+                {documents.length && onOpenDocument ? <button type="button" className="secondary-button" onClick={() => onOpenDocument(documents[0])}>Preview invoice</button> : null}
+              </article>
+            })}
+            {!visibleConstructionCoverage.length ? <div className="cost-empty-state"><strong>No construction costs match this coverage filter.</strong></div> : null}
+          </div>
+        </div>
+      </details>
+
       <div className="panel check-register-panel">
-        <div className="panel-header"><div><p className="eyebrow">Audit trail</p><h2>Check register</h2></div><strong>{sortedChecks.length}</strong></div>
+        <div className="panel-header"><div><p className="eyebrow">Audit trail</p><h2>Check register</h2><p>{filteredChecks.length} of {sortedChecks.length} checks · {currency.format(registerTotal)} active vendor payments shown</p></div><strong>{filteredChecks.length}</strong></div>
+        <div className="check-register-filters">
+          <label>Search checks<input aria-label="Search check register" type="search" value={registerSearch} onChange={(event) => setRegisterSearch(event.target.value)} placeholder="Check #, payee, memo, invoice…" /></label>
+          <label>Status<select aria-label="Filter check status" value={registerStatus} onChange={(event) => setRegisterStatus(event.target.value)}><option value="all">All statuses</option><option value="draft">Draft</option><option value="printed">Printed</option><option value="voided">Voided</option></select></label>
+          <label>Lot<select aria-label="Filter check lot" value={registerLot} onChange={(event) => setRegisterLot(event.target.value)}><option value="all">All lots</option><option value="unassigned">Not lot-specific</option>{jobLots.map((lot) => <option key={lot} value={lot}>{lot}</option>)}</select></label>
+          <label>Invoice / cost link<select aria-label="Filter check accounting link" value={registerLink} onChange={(event) => setRegisterLink(event.target.value)}><option value="all">All links</option><option value="invoice">Linked to invoice</option><option value="cost">Linked to cost</option><option value="linked">Any linked record</option><option value="unlinked">Not attached</option><option value="missing_document">Missing invoice file</option></select></label>
+          <label>Funding draw<select aria-label="Filter check funding draw" value={registerDraw} onChange={(event) => setRegisterDraw(event.target.value)}><option value="all">All draw funding</option><option value="unfunded">Not funded by draw</option>{loanDraws.map((draw) => <option key={draw.id} value={String(draw.id)}>{draw.description || `Draw ${draw.id}`}</option>)}</select></label>
+          <label>From<input aria-label="Filter checks from date" type="date" value={registerDateFrom} onChange={(event) => setRegisterDateFrom(event.target.value)} /></label>
+          <label>To<input aria-label="Filter checks to date" type="date" value={registerDateTo} onChange={(event) => setRegisterDateTo(event.target.value)} /></label>
+          <button type="button" className="secondary-button" onClick={clearRegisterFilters}>Clear filters</button>
+        </div>
         <div className="check-register">
-          {sortedChecks.map((check) => <article key={check.id} className={`check-register-row ${check.status}`}>
-            <div><strong>#{check.checkNumber} · {check.payee}</strong><p>{check.date} · {check.accountLabel}{check.memo ? ` · ${check.memo}` : ''}</p></div>
+          {filteredChecks.map((check) => <article key={check.id} className={`check-register-row ${check.status}${check.checkType === 'internal_transfer' ? ' internal-transfer' : ''}`}>
+            <div><strong>#{check.checkNumber} · {check.payee}</strong><p>{check.date} · {check.accountLabel}{check.checkType === 'internal_transfer' ? ` → ${check.destinationAccount || 'Destination not recorded'}` : ''}{check.memo ? ` · ${check.memo}` : ''}</p>{check.checkType === 'internal_transfer' ? <span className="check-transfer-badge">Internal transfer · Not a cost</span> : null}</div>
             <strong>{currency.format(check.amount)}</strong>
             <span className={`check-status ${check.status}`}>{check.status}</span>
-            <label className="check-register-attachment">Attached to
+            {check.checkType !== 'internal_transfer' ? <label className="check-register-attachment">Attached to
               <select aria-label={`Attachment for check ${check.checkNumber}`} value={checkTargetValue(check)} disabled={linkingCheckId === check.id} onChange={(event) => changeCheckLink(check, event.target.value)}>
                 <option value="">Not attached</option>
                 {accountingTargets.map((target) => <option key={target.value} value={target.value}>{target.label}</option>)}
               </select>
-            </label>
-            {drawTargets.length ? <label className="check-register-attachment">Funded by draw
+            </label> : null}
+            {check.checkType !== 'internal_transfer' && drawTargets.length ? <label className="check-register-attachment">Funded by draw
               <select aria-label={`Draw funding for check ${check.checkNumber}`} value={check.fundedByIncomeId ? String(check.fundedByIncomeId) : ''} disabled={fundingCheckId === check.id} onChange={(event) => changeCheckFunding(check, event.target.value)}>
                 <option value="">Not funded by a draw</option>
                 {drawTargets.map((target) => <option key={target.value} value={target.value}>{target.label}</option>)}
               </select>
             </label> : null}
-            <label className="check-register-attachment">Lot
+            {check.checkType !== 'internal_transfer' ? <label className="check-register-attachment">Lot
               <select aria-label={`Lot for check ${check.checkNumber}`} value={check.lot || ''} disabled={lotCheckId === check.id} onChange={(event) => changeCheckLot(check, event.target.value)}>
                 <option value="">Not lot-specific</option>
                 {jobLots.map((lot) => <option key={lot} value={lot}>{lot}</option>)}
               </select>
-            </label>
+            </label> : null}
             <div className="button-row">
+              {check.checkType !== 'internal_transfer' && documentsForTarget(checkTargetValue(check)).length && onOpenDocument ? <button type="button" className="secondary-button" onClick={() => previewTargetDocument(checkTargetValue(check))}>Preview invoice</button> : null}
               <button type="button" className="secondary-button" onClick={() => viewSavedCheck(check)}>View check</button>
+              <button type="button" className="secondary-button" onClick={() => editSavedCheck(check)}>Edit</button>
+              {check.checkType !== 'internal_transfer' ? <button type="button" className="secondary-button" disabled={preparingEnvelope} onClick={() => printEnvelope(check)}>{preparingEnvelope ? 'Reading address…' : 'Envelope'}</button> : null}
+              {check.checkType !== 'internal_transfer' ? <button type="button" className="secondary-button" onClick={() => printPaidInvoice(check)}>Paid invoice</button> : null}
               {check.status !== 'voided' ? <button type="button" className="action-button" onClick={() => printCheck(check)}>{check.status === 'printed' ? 'Reprint' : 'Print'}</button> : null}
-              {check.status !== 'voided' ? <button type="button" className="danger-button" onClick={() => voidCheck(check)}>Void</button> : null}
+              {check.status === 'voided' && viewingCheck?.id !== check.id && pendingVoidedReprintId !== check.id ? <button type="button" className="secondary-button" onClick={() => setPendingVoidedReprintId(check.id)}>Reprint voided check</button> : null}
+              {check.status !== 'voided' && pendingVoidCheckId !== check.id ? <button type="button" className="danger-button" onClick={() => setPendingVoidCheckId(check.id)}>Void</button> : null}
             </div>
+            {check.status !== 'voided' && pendingVoidCheckId === check.id ? <div className="voided-reprint-warning" role="alert">
+              <strong>Void check #{check.checkNumber}?</strong>
+              <span>The check will remain in the audit register, but it will no longer count as payment. Any linked cost will be shown as unpaid so you can create a replacement check or choose another payment method.</span>
+              <div className="button-row"><button type="button" className="danger-button" onClick={() => voidCheck(check)}>Confirm void</button><button type="button" className="secondary-button" onClick={() => setPendingVoidCheckId(null)}>Cancel</button></div>
+            </div> : null}
+            {check.status === 'voided' && viewingCheck?.id !== check.id && pendingVoidedReprintId === check.id ? <div className="voided-reprint-warning">
+              <strong>Reprint voided check #{check.checkNumber}?</strong>
+              <span>This will reactivate it and change its register status from Voided to Printed.</span>
+              <div className="button-row"><button type="button" className="danger-button" onClick={() => confirmVoidedReprint(check)}>Confirm reprint</button><button type="button" className="secondary-button" onClick={() => setPendingVoidedReprintId(null)}>Cancel</button></div>
+            </div> : null}
           </article>)}
-          {!sortedChecks.length ? <div className="cost-empty-state"><strong>No checks saved for this project.</strong><p>Prepare the first check using the form.</p></div> : null}
+          {!filteredChecks.length ? <div className="cost-empty-state"><strong>{sortedChecks.length ? 'No checks match these filters.' : 'No checks saved for this project.'}</strong><p>{sortedChecks.length ? 'Clear or change the register filters.' : 'Prepare the first check using the form.'}</p></div> : null}
         </div>
       </div>
     </section>
@@ -652,6 +1260,18 @@ function CheckPrinting({ project, checks = [], invoices = [], costs = [], loanDr
           <span className="print-check-field print-check-coord-label print-check-memo-value" style={printFieldStyle('memo', fieldOffsets, 'memo', printingCheck.templateKey)} aria-label="Memo field coordinates">{fieldCoordinateLabel('memo', printingCheck.templateKey, fieldOffsetIn(fieldOffsets, printingCheck.templateKey, 'memo'))}</span>
         </> : null}
       </div>
+    </section>, document.body) : null}
+    {printingEnvelope ? createPortal(<section className="print-envelope-sheet" aria-label={`Printable envelope for ${printingEnvelope.payee}`} style={{ '--envelope-rotation': `${envelopeRotation}deg`, '--envelope-return-top': '0.8in', '--envelope-return-left': '1.65in' }}>
+      <style>{'@page { size: 9in 4in; margin: 0; }'}</style>
+      <address className="print-envelope-return-address">
+        <strong>Green Fort LLC</strong>
+        <span>200 Rosa Bluff Ct</span>
+        <span>Holly Springs, NC 27540</span>
+      </address>
+      <address className="print-envelope-recipient-address">
+        <strong>{printingEnvelope.payee}</strong>
+        {printingEnvelope.mailingAddress.split(/\r?\n/).filter(Boolean).map((line, index) => <span key={`${line}-${index}`}>{line}</span>)}
+      </address>
     </section>, document.body) : null}
     {printingTemplateSheet ? createPortal(<section className="print-template-sheet" aria-label="Printable BOFA and Flagstar template sheet">
       <style>{'@page { size: 8.5in 11in; margin: 0; }'}</style>
