@@ -148,7 +148,7 @@ const isDuplicateCheckError = (error) => {
 const jobLots = ['Lot 1', 'Lot 2', 'Lot 3', 'Lot 4']
 const emptyList = []
 
-function CheckPrinting({ project, checks = emptyList, invoices = emptyList, costs = emptyList, loanDraws = emptyList, vendorAddresses = emptyList, initialDraft = null, onInitialDraftApplied, onSaveCheck, onUpdateCheck, onUpdateStatus, onUpdateLink, onUpdateTemplate, onUpdateFunding, onUpdateLot, onOpenDocument, onPrintPaidInvoice, onExtractVendorAddress, onSaveVendorAddress, onImportVendorAddresses }) {
+function CheckPrinting({ project, checks = emptyList, invoices = emptyList, costs = emptyList, loanDraws = emptyList, vendorAddresses = emptyList, initialDraft = null, onInitialDraftApplied, onSaveCheck, onUpdateCheck, onUpdateStatus, onUpdateLink, onUpdateTemplate, onUpdateFunding, onUpdateLot, onEditCost, onAttachInvoice, onOpenDocument, onPrintPaidInvoice, onExtractVendorAddress, onSaveVendorAddress, onImportVendorAddresses }) {
   const [checkNumber, setCheckNumber] = useState('')
   const [payee, setPayee] = useState('')
   const [amount, setAmount] = useState('')
@@ -196,6 +196,21 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
   const [registerDraw, setRegisterDraw] = useState('all')
   const [registerDateFrom, setRegisterDateFrom] = useState('')
   const [registerDateTo, setRegisterDateTo] = useState('')
+  const [invoiceUpload, setInvoiceUpload] = useState(null)
+  const [invoiceUploadMessage, setInvoiceUploadMessage] = useState('')
+  const attachInvoice = async (cost, event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || !onAttachInvoice) return
+    setInvoiceUpload(cost.costId || cost.id)
+    setInvoiceUploadMessage('')
+    try {
+      await onAttachInvoice(cost, file)
+      setInvoiceUploadMessage(`Invoice attached to ${cost.name}.`)
+    } catch (error) {
+      setInvoiceUploadMessage(`Invoice upload failed: ${error.message || 'Please retry.'}`)
+    } finally { setInvoiceUpload(null) }
+  }
   const [constructionCoverageFilter, setConstructionCoverageFilter] = useState('all')
   const previewPanelRef = useRef(null)
   const attachmentSelectRef = useRef(null)
@@ -1152,6 +1167,7 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
               <option value="paid">Fully paid</option>
             </select>
           </label>
+          {invoiceUploadMessage ? <p role="status">{invoiceUploadMessage}</p> : null}
           <div className="construction-coverage-list">
             {visibleConstructionCoverage.map(({ cost, relatedInvoices, documents, activeChecks, paid, hasInvoice }) => {
               const costAmount = Number(cost.amount || 0)
@@ -1164,6 +1180,10 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
                   <span>{relatedInvoices.length} invoice record{relatedInvoices.length === 1 ? '' : 's'}</span>
                   <span>{activeChecks.length} active check{activeChecks.length === 1 ? '' : 's'} · {currency.format(paid)} paid</span>
                   {remaining > 0.009 ? <span className="warning">{currency.format(remaining)} unpaid</span> : <span className="complete">Fully paid</span>}
+                </div>
+                <div className="button-row">
+                  {onAttachInvoice ? <label className="secondary-button">{invoiceUpload === (cost.costId || cost.id) ? 'Uploading…' : 'Add invoice'}<input aria-label={`Add invoice for ${cost.name}`} type="file" accept="application/pdf,image/*" disabled={invoiceUpload != null} onChange={(event) => attachInvoice(cost, event)} /></label> : null}
+                  {onEditCost ? <button type="button" className="secondary-button" onClick={() => onEditCost(cost.costId || cost.id)}>Edit cost</button> : null}
                 </div>
                 {documents.length && onOpenDocument ? <button type="button" className="secondary-button" onClick={() => onOpenDocument(documents[0])}>Preview invoice</button> : null}
               </article>

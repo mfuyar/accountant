@@ -20,6 +20,19 @@ const savedCheck = {
 }
 
 describe('CheckPrinting', () => {
+  it('attaches an invoice to the selected construction cost and opens its editor', async () => {
+    const cost = { costId: 'framing', name: 'Chris Framing', phase: 'construction', amount: 29000, attachments: [] }
+    const onAttachInvoice = vi.fn().mockResolvedValue({})
+    const onEditCost = vi.fn()
+    render(<CheckPrinting project={{ id: 7 }} costs={[cost]} onAttachInvoice={onAttachInvoice} onEditCost={onEditCost} />)
+    const file = new File(['invoice'], 'framing.pdf', { type: 'application/pdf' })
+    fireEvent.change(screen.getByLabelText('Add invoice for Chris Framing'), { target: { files: [file] } })
+    await waitFor(() => expect(onAttachInvoice).toHaveBeenCalledWith(cost, file))
+    expect(await screen.findByText('Invoice attached to Chris Framing.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit cost' }))
+    expect(onEditCost).toHaveBeenCalledWith('framing')
+  })
+
   it('writes currency as check-safe words', () => {
     expect(amountToCheckWords(1250.75)).toBe('One Thousand Two Hundred Fifty and 75/100 Dollars')
     expect(amountToCheckWords(0.05)).toBe('Zero and 05/100 Dollars')

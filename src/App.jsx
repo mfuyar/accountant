@@ -2452,6 +2452,8 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
         onUpdateTemplate={handleProjectCheckTemplate}
         onUpdateFunding={handleProjectCheckFunding}
         onUpdateLot={handleProjectCheckLot}
+        onEditCost={handleOpenCostEdit}
+        onAttachInvoice={handleAttachCostDocument}
         onOpenDocument={handleOpenCostDocument}
         onPrintPaidInvoice={handlePrintPaidInvoice}
         onExtractVendorAddress={handleExtractVendorAddress}
