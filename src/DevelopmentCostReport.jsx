@@ -217,6 +217,7 @@ const ReportContent = ({ project, costs, breakdowns, owners, incomes, summary, l
       <div className="development-report-kpis">
         <div><span>Pre-sale deposits</span><strong>{currency.format(funding.preSaleDeposits)}</strong></div>
         <div><span>Deposit refunds</span><strong>{currency.format(funding.refunded)}</strong></div>
+        <div><span>Refund checks pending</span><strong>{currency.format(funding.pendingRefund)}</strong></div>
         <div><span>Development spending</span><strong>{currency.format(funding.developmentSpend)}</strong></div>
         <div><span>Deposit utilized</span><strong>{currency.format(funding.utilized)}</strong></div>
         <div><span>Deposit remaining</span><strong>{currency.format(funding.remaining)}</strong></div>
@@ -406,6 +407,7 @@ function DevelopmentCostReport({ project, costs = [], breakdowns = [], owners = 
       ['Unassigned to lots', summary.unassigned.toFixed(2)],
       ['Pre-sale deposits', summarizeDevelopmentFunding(costs, incomes).preSaleDeposits.toFixed(2)],
       ['Pre-sale deposit refunds', summarizeDevelopmentFunding(costs, incomes).refunded.toFixed(2)],
+      ['Pre-sale refund checks pending', summarizeDevelopmentFunding(costs, incomes).pendingRefund.toFixed(2)],
       ['Pre-sale deposit utilized', summarizeDevelopmentFunding(costs, incomes).utilized.toFixed(2)],
       ['Pre-sale deposit remaining', summarizeDevelopmentFunding(costs, incomes).remaining.toFixed(2)], [],
       ['Date', 'Ledger detail', 'Owner / vendor', 'Phase', 'Main category', 'Subcategory', 'Parent cost', 'Lot allocation', 'Amount'],

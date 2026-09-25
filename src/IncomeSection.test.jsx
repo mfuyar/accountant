@@ -234,6 +234,31 @@ describe('IncomeSection', () => {
     })))
   })
 
+  it('shows a pending check as a refund payable while removing it from the buyer deposit balance', () => {
+    render(<IncomeSection
+      incomes={[{
+        id: 91, projectId: 7, description: 'Pre-sale deposit', source: 'Buyers', amount: 10000,
+        date: '2025-11-10', type: 'pre_sale_deposit', attachments: [], activities: [
+          { id: 'receipt-a', type: 'receipt', amount: 10000, date: '2025-11-10', description: 'Muhemmet Uyar deposit', lot: 'Lot 1' },
+          { id: 'refund-a', relatedActivityId: 'receipt-a', type: 'refund', amount: 10000, status: 'pending', paymentMethod: 'check', date: '2026-09-25', description: 'Buyer deposit refund payable to Muhemmet Uyar', lot: 'Lot 1' },
+        ],
+      }]}
+      projects={[{ id: 7, name: 'Tryon Rd' }]}
+      onAddIncome={vi.fn()}
+      onEditIncome={vi.fn()}
+      onDeleteIncome={vi.fn()}
+    />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'View deposit ledger' }))
+    const ledger = screen.getByLabelText('Deposit ledger for Pre-sale deposit')
+    expect(within(ledger).getByText('Refund payable').parentElement).toHaveTextContent('$10,000.00')
+    expect(within(ledger).getByText('Refunded').parentElement).toHaveTextContent('$0.00')
+    expect(within(ledger).getByText('Remaining balance').parentElement).toHaveTextContent('$0.00')
+    expect(within(ledger).getByText('Refund payable — check to be issued')).toBeInTheDocument()
+    expect(within(ledger).getByText('Payment method: Check')).toBeInTheDocument()
+    expect(within(ledger).getByRole('button', { name: 'Add refund payment for Muhemmet Uyar deposit' })).toBeDisabled()
+  })
+
   it('offers a non-monetary cancellation activity and requires its signed document', () => {
     const onEditIncome = vi.fn()
     render(<IncomeSection

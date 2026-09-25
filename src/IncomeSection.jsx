@@ -48,6 +48,8 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments
   const [relatedActivityId, setRelatedActivityId] = useState(null)
   const [pendingActivityDeleteId, setPendingActivityDeleteId] = useState(null)
   const [activityType, setActivityType] = useState('receipt')
+  const [activityStatus, setActivityStatus] = useState('paid')
+  const [activityPaymentMethod, setActivityPaymentMethod] = useState('')
   const [activityAmount, setActivityAmount] = useState('')
   const [activityDate, setActivityDate] = useState('')
   const [activityDescription, setActivityDescription] = useState('')
@@ -139,6 +141,8 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments
     setEditingActivityId(null)
     setRelatedActivityId(null)
     setActivityType('receipt')
+    setActivityStatus('paid')
+    setActivityPaymentMethod('')
     setActivityAmount('')
     setActivityDate('')
     setActivityDescription('')
@@ -155,6 +159,8 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments
     setEditingActivityId(null)
     setRelatedActivityId(null)
     setActivityType('receipt')
+    setActivityStatus('paid')
+    setActivityPaymentMethod('')
     setActivityAmount('')
     setActivityDate(new Date().toLocaleDateString('en-CA'))
     setActivityDescription('')
@@ -170,6 +176,8 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments
     setEditingActivityId(activity.id)
     setRelatedActivityId(activity.relatedActivityId || null)
     setActivityType(activity.type)
+    setActivityStatus(activity.status === 'pending' ? 'pending' : 'paid')
+    setActivityPaymentMethod(activity.paymentMethod || '')
     setActivityAmount(activity.type === 'cancellation' ? '' : String(activity.amount || ''))
     setActivityDate(activity.date || '')
     setActivityDescription(activity.description || '')
@@ -190,6 +198,8 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments
     setEditingActivityId(null)
     setRelatedActivityId(receipt.id)
     setActivityType(nextType)
+    setActivityStatus('paid')
+    setActivityPaymentMethod('')
     setActivityAmount(nextType === 'refund' ? String(refundableBalance || '') : '')
     setActivityDate(new Date().toLocaleDateString('en-CA'))
     setActivityDescription(`${nextType === 'refund' ? 'Refund payment' : 'Cancellation'} for ${receipt.description}`)
@@ -286,6 +296,7 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments
       ...(existingActivity || {}),
       id: editingActivityId || globalThis.crypto?.randomUUID?.() || `activity-${Date.now()}`,
       type: activityType,
+      ...(activityType === 'refund' ? { status: activityStatus, paymentMethod: activityPaymentMethod || null } : {}),
       amount: numericAmount,
       date: activityDate,
       description: activityDescription.trim(),
@@ -574,14 +585,17 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments
   }
 
   const renderDepositActivityCard = (income, activity, { nested = false } = {}) => {
-    const refundedForReceipt = activity.type === 'receipt' ? (income.activities || [])
+    const linkedRefunds = activity.type === 'receipt' ? (income.activities || [])
       .filter((entry) => entry.type === 'refund' && String(entry.relatedActivityId) === String(activity.id))
-      .reduce((sum, entry) => sum + Number(entry.amount || 0), 0) : 0
-    const refundableBalance = Math.max(0, Number(activity.amount || 0) - refundedForReceipt)
+      : []
+    const refundedForReceipt = linkedRefunds.filter((entry) => entry.status !== 'pending').reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+    const pendingForReceipt = linkedRefunds.filter((entry) => entry.status === 'pending').reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+    const refundableBalance = Math.max(0, Number(activity.amount || 0) - refundedForReceipt - pendingForReceipt)
     return <article key={activity.id} className={nested ? 'deposit-activity-nested' : ''}>
       <div className="deposit-activity-copy">
-        <strong>{depositActivityLabels[activity.type] || activity.type}</strong>
+        <strong>{activity.type === 'refund' && activity.status === 'pending' ? 'Refund payable — check to be issued' : depositActivityLabels[activity.type] || activity.type}</strong>
         <span className="deposit-activity-meta">{activity.date}{activity.lot ? ` · ${activity.lot}` : ''}</span>
+        {activity.type === 'refund' && activity.paymentMethod ? <span className="deposit-activity-meta">Payment method: {activity.paymentMethod === 'check' ? 'Check' : activity.paymentMethod}</span> : null}
         <p>{activity.description}</p>
         {activity.type === 'receipt' && activity.bankDetail ? <div className={`deposit-bank-match ${activity.reconciliationStatus === 'probable_match' ? 'probable' : ''}`}>
           <div>
@@ -591,13 +605,13 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments
           <p>{activity.bankDetail}</p>
           {activity.matchBasis ? <small>{activity.matchBasis}</small> : null}
         </div> : null}
-        {activity.type === 'receipt' && refundedForReceipt > 0 ? <span className="deposit-refund-progress">Refunded {currency.format(refundedForReceipt)} · {currency.format(refundableBalance)} left to refund</span> : null}
+        {activity.type === 'receipt' && (refundedForReceipt > 0 || pendingForReceipt > 0) ? <span className="deposit-refund-progress">{refundedForReceipt > 0 ? `Refunded ${currency.format(refundedForReceipt)} · ` : ''}{pendingForReceipt > 0 ? `Refund payable ${currency.format(pendingForReceipt)} · ` : ''}{currency.format(refundableBalance)} left to refund</span> : null}
       </div>
       <strong className="deposit-activity-amount">{activity.type === 'cancellation' ? 'Status only' : currency.format(activity.amount)}</strong>
       <div className="deposit-activity-actions">
         {activity.attachment && onOpenDocument ? <button type="button" className="secondary-button" onClick={() => openIncomeDocument(activity.attachment)}>Preview document</button> : null}
         <button type="button" className="secondary-button" aria-label={`Edit ${activity.description}`} onClick={() => startEditDepositActivity(income, activity)}>Edit</button>
-        {activity.type === 'receipt' ? <button type="button" className="secondary-button" disabled={refundableBalance <= 0} aria-label={`Add refund payment for ${activity.description}`} onClick={() => startReceiptFollowUp(income, activity, 'refund')}>{refundableBalance > 0 ? 'Add refund payment' : 'Fully refunded'}</button> : null}
+        {activity.type === 'receipt' ? <button type="button" className="secondary-button" disabled={refundableBalance <= 0} aria-label={`Add refund payment for ${activity.description}`} onClick={() => startReceiptFollowUp(income, activity, 'refund')}>{refundableBalance > 0 ? 'Add refund payment' : pendingForReceipt > 0 ? 'Refund check pending' : 'Fully refunded'}</button> : null}
         {activity.type === 'receipt' ? <button type="button" className="secondary-button" aria-label={`Cancel agreement for ${activity.description}`} onClick={() => startReceiptFollowUp(income, activity, 'cancellation')}>Cancel agreement</button> : null}
         {String(pendingActivityDeleteId) === String(activity.id) ? <>
           <button type="button" className="danger-button" aria-label={`Confirm remove ${activity.description}`} disabled={savingActivity} onClick={() => handleRemoveDepositActivity(income, activity)}>Confirm remove</button>
@@ -831,6 +845,7 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments
                   <div><span>Receipts unreconciled</span><strong>{currency.format(depositSummary.unreconciled)}</strong></div>
                   <div><span>Applied</span><strong>{currency.format(depositSummary.applied)}</strong></div>
                   <div><span>Refunded</span><strong>{currency.format(depositSummary.refunded)}</strong></div>
+                  <div><span>Refund payable</span><strong>{currency.format(depositSummary.pendingRefund)}</strong></div>
                   <div><span>Net adjustments</span><strong>{currency.format(depositSummary.adjustment)}</strong></div>
                   <div className={depositSummary.remaining < 0 ? 'negative' : ''}><span>Remaining balance</span><strong>{currency.format(depositSummary.remaining)}</strong></div>
                 </div>
@@ -845,7 +860,7 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments
                         {renderDepositActivityCard(income, activity)}
                         {linkedRefunds.length ? <div className="deposit-linked-refunds" aria-label={`Refund payments for ${activity.description}`}>
                           <div className="deposit-linked-refunds-heading">
-                            <strong>Refund payments</strong>
+                            <strong>{linkedRefunds.some((refund) => refund.status === 'pending') ? 'Refunds and pending checks' : 'Refund payments'}</strong>
                             <span>{linkedRefunds.length} payment{linkedRefunds.length === 1 ? '' : 's'} · {currency.format(linkedRefunds.reduce((sum, refund) => sum + Number(refund.amount || 0), 0))}</span>
                           </div>
                           {linkedRefunds.map((refund) => renderDepositActivityCard(income, refund, { nested: true }))}
@@ -866,6 +881,22 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments
                   <label>Amount
                     <input aria-label="Deposit activity amount" type="number" min="0.01" step="0.01" disabled={activityType === 'cancellation'} placeholder={activityType === 'cancellation' ? 'Not applicable' : ''} value={activityType === 'cancellation' ? '' : activityAmount} onChange={(event) => setActivityAmount(event.target.value)} />
                   </label>
+                  {activityType === 'refund' ? <>
+                    <label>Refund status
+                      <select aria-label="Refund status" value={activityStatus} onChange={(event) => setActivityStatus(event.target.value)}>
+                        <option value="pending">Pending — check to be issued</option>
+                        <option value="paid">Paid to buyer</option>
+                      </select>
+                    </label>
+                    <label>Payment method
+                      <select aria-label="Refund payment method" value={activityPaymentMethod} onChange={(event) => setActivityPaymentMethod(event.target.value)}>
+                        <option value="">Not specified</option>
+                        <option value="check">Check</option>
+                        <option value="bank transfer">Bank transfer</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </label>
+                  </> : null}
                   <label>Date
                     <input aria-label="Deposit activity date" type="date" value={activityDate} onChange={(event) => setActivityDate(event.target.value)} />
                   </label>

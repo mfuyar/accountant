@@ -209,7 +209,7 @@ describe('App', () => {
     fireEvent.change(screen.getByLabelText(/^invoice date$/i), { target: { value: '2025-01-15' } })
     fireEvent.click(screen.getByRole('button', { name: /^add cost$/i }))
 
-    fireEvent.click(screen.getByRole('button', { name: /open cost page/i }))
+    fireEvent.click(screen.getByRole('button', { name: /view and search costs/i }))
     const activeCostSection = screen.getByRole('heading', { name: /all tracked costs/i }).closest('section')
     const originalRow = [...activeCostSection.querySelectorAll('.cost-record-title')].find((node) => node.textContent === 'Land Acquisition')?.closest('.cost-record-card')
 

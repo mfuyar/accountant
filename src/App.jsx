@@ -1880,7 +1880,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
                 setBreakdownParentCostId(null)
                 setCostPageEditCostId(null)
                 setShowCostPage(true)
-              }}>Open full cost page</button>
+              }}>Search all costs</button>
             </div>
           </div>
           {overviewCostMessage ? <div className={`overview-cost-message ${overviewCostMessage.type}`} role={overviewCostMessage.type === 'error' ? 'alert' : 'status'}>
@@ -2218,7 +2218,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
               <button type="button" className="action-button" onClick={() => {
                 setBreakdownParentCostId(null)
                 setShowCostPage(true)
-              }}>Open cost page</button>
+              }}>View and search costs</button>
             </div>
           </div>
           {showOwnerPhaseCostForm ? <form id="owner-phase-cost-form" className="owner-form" noValidate onSubmit={handleDevelopmentCostSubmit}>

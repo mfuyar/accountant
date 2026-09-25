@@ -60,6 +60,66 @@ describe('CostPage invoice extraction', () => {
     expect(document.getElementById('cost-editor-form')).toHaveAttribute('hidden')
   })
 
+  it('shows the newest added cost first by default even when its invoice is older', () => {
+    const olderEntry = { id: 1, costId: 'older-entry', name: 'Older entry', amount: 100, date: '2026-09-20', createdAt: '2026-09-20T12:00:00Z' }
+    const newBackdatedEntry = { id: 2, costId: 'new-entry', name: 'New backdated entry', amount: 200, date: '2025-09-09', createdAt: '2026-09-25T12:00:00Z' }
+    const costs = [olderEntry, newBackdatedEntry].map((cost) => ({ ...cost, version: 1, ownerId: 1, phase: 'construction', attachments: [], lotAllocations: [] }))
+    const { container } = render(<CostPage
+      owners={[{ id: 1, name: 'Green Fort' }]}
+      developmentCosts={costs}
+      costVersions={costs}
+      onBack={() => {}}
+      onAddDevelopmentCost={() => {}}
+      onEditDevelopmentCost={() => {}}
+      onDeleteDevelopmentCost={() => {}}
+    />)
+
+    const cards = () => container.querySelectorAll('.cost-record-card')
+    expect(screen.getByLabelText('Order costs')).toHaveValue('added_desc')
+    expect(cards()[0]).toHaveTextContent('New backdated entry')
+    fireEvent.change(screen.getByLabelText('Order costs'), { target: { value: 'invoice_desc' } })
+    expect(cards()[0]).toHaveTextContent('Older entry')
+  })
+
+  it('shows a reimbursement clearly and reveals the matching expense when searched', () => {
+    const reimbursement = {
+      id: 1, costId: 'builders-expenses', version: 1,
+      name: 'Builders Expenses — Mike Dehghan reimbursement', vendorName: 'Mike Dehghan',
+      amount: 2743.68, ownerId: 1, phase: 'construction', date: '2026-09-25',
+      createdAt: '2026-09-25T14:00:00Z', notes: 'Zelle planned',
+      details: 'Eight expenses supported by the attached PDF.',
+      lotAllocations: [1, 2, 3, 4].map((number) => ({ lot: `Lot ${number}`, amount: 685.92 })),
+      attachments: [],
+    }
+    const older = { id: 2, costId: 'older', version: 1, name: 'Older cost', amount: 100, ownerId: 1, phase: 'construction', date: '2026-08-01', createdAt: '2026-08-01T14:00:00Z', attachments: [] }
+    const breakdowns = [
+      { id: 3, costId: 'portable-toilet', parentCostId: reimbursement.costId, name: 'Meridian portable toilet', amount: 53.10, phase: 'construction', date: '2025-09-09', details: 'Invoice 6842813' },
+      { id: 4, costId: 'lumber', parentCostId: reimbursement.costId, name: 'Lowe’s lumber', amount: 2690.58, phase: 'construction', date: '2026-08-10' },
+    ]
+    const { container } = render(<CostPage
+      owners={[{ id: 1, name: 'Green Fort' }]}
+      developmentCosts={[older, reimbursement]}
+      breakdownCosts={breakdowns}
+      costVersions={[older, reimbursement, ...breakdowns]}
+      onBack={() => {}}
+      onAddDevelopmentCost={() => {}}
+      onEditDevelopmentCost={() => {}}
+      onDeleteDevelopmentCost={() => {}}
+    />)
+
+    const cards = container.querySelectorAll('.cost-record-card')
+    expect(cards[0]).toHaveTextContent('Builders Expenses — Mike Dehghan reimbursement')
+    expect(within(cards[0]).getByLabelText('Reimbursement summary')).toHaveTextContent('To reimburse: Mike Dehghan')
+    expect(within(cards[0]).getByLabelText('Reimbursement summary')).toHaveTextContent('Zelle planned · payment not recorded')
+    expect(within(cards[0]).getByLabelText('Reimbursement summary')).toHaveTextContent('4 lots · $685.92 per lot')
+    fireEvent.click(within(cards[0]).getByRole('button', { name: 'View 2 expense items' }))
+    expect(screen.getByText(/Meridian portable toilet/)).toBeInTheDocument()
+    fireEvent.click(within(cards[0]).getByRole('button', { name: 'Hide expense items' }))
+    fireEvent.change(screen.getByLabelText('Search costs'), { target: { value: '6842813' } })
+    expect(screen.getByText(/Meridian portable toilet/)).toBeInTheDocument()
+    expect(screen.getByText('Matching expense items shown below')).toBeInTheDocument()
+  })
+
   it('shows a development phase total without double-counting its breakdown details', () => {
     const developmentCosts = [
       { id: 1, costId: 'kemal-parent', version: 1, name: 'Kemal development', amount: 424238, ownerId: 1, phase: 'development', date: '2022-03-15', attachments: [] },
@@ -558,14 +618,14 @@ describe('CostPage invoice extraction', () => {
     expect(screen.getByLabelText('Invoice date')).toHaveValue('2026-06-01')
   })
 
-  it('sorts breakdowns by amount, date, or description', () => {
+  it('defaults breakdowns to newest added and can sort by amount, date, or description', () => {
     const parentCost = {
       id: 10, costId: 'parent-cost', version: 1, name: 'All Development cost',
       amount: 100000, ownerId: 1, phase: 'development', date: '2026-07-14', attachments: [],
     }
     const breakdownCosts = [
-      { ...parentCost, id: 11, costId: 'child-a', parentCostId: 'parent-cost', name: 'Older small item', amount: 100, date: '2022-01-01' },
-      { ...parentCost, id: 12, costId: 'child-b', parentCostId: 'parent-cost', name: 'Newer large item', amount: 500, date: '2023-01-01' },
+      { ...parentCost, id: 11, costId: 'child-a', parentCostId: 'parent-cost', name: 'Older small item', amount: 100, date: '2022-01-01', createdAt: '2026-09-25T12:00:00Z' },
+      { ...parentCost, id: 12, costId: 'child-b', parentCostId: 'parent-cost', name: 'Newer large item', amount: 500, date: '2023-01-01', createdAt: '2026-07-14T12:00:00Z' },
     ]
     const { container } = render(
       <CostPage
@@ -583,6 +643,10 @@ describe('CostPage invoice extraction', () => {
     expect(container.querySelectorAll('.cost-breakdown-row')).toHaveLength(0)
     fireEvent.click(screen.getByRole('button', { name: 'Show breakdowns (2)' }))
     let rows = container.querySelectorAll('.cost-breakdown-row')
+    expect(screen.getByLabelText('Sort breakdowns')).toHaveValue('added_desc')
+    expect(rows[0]).toHaveTextContent('Older small item')
+    fireEvent.change(screen.getByLabelText('Sort breakdowns'), { target: { value: 'amount_desc' } })
+    rows = container.querySelectorAll('.cost-breakdown-row')
     expect(rows[0]).toHaveTextContent('Newer large item')
     fireEvent.change(screen.getByLabelText('Sort breakdowns'), { target: { value: 'date_asc' } })
     rows = container.querySelectorAll('.cost-breakdown-row')

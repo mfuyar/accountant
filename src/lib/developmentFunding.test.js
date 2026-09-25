@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deriveDevelopmentFundingIncomes, isPreSaleDepositCost, summarizeDevelopmentFunding } from './developmentFunding'
+import { deriveDevelopmentFundingIncomes, isPreSaleDepositCost, summarizeDevelopmentFunding, summarizePreSaleDepositActivities } from './developmentFunding'
 
 describe('development funding', () => {
   const fundingCost = { costId: 'fund-1', projectId: 2, ownerId: 12, name: 'Pre sale Deposits (Utilized)', amount: 300000, date: '2026-07-14', phase: 'development', lotAllocations: [] }
@@ -19,7 +19,7 @@ describe('development funding', () => {
     expect(summarizeDevelopmentFunding(
       [{ phase: 'development', amount: 500000 }, { phase: 'construction', amount: 100000 }],
       [{ type: 'pre_sale_deposit', amount: 300000 }],
-    )).toEqual({ developmentSpend: 500000, preSaleDeposits: 300000, refunded: 0, adjustment: 0, utilized: 300000, remaining: 0 })
+    )).toEqual({ developmentSpend: 500000, preSaleDeposits: 300000, refunded: 0, pendingRefund: 0, adjustment: 0, utilized: 300000, remaining: 0 })
   })
 
   it('does not add buyer installment detail to the derived master deposit', () => {
@@ -56,6 +56,21 @@ describe('development funding', () => {
         { type: 'adjustment_increase', amount: 5000 },
         { type: 'cancellation', amount: 0 },
       ] }],
-    )).toEqual({ developmentSpend: 500000, preSaleDeposits: 300000, refunded: 25000, adjustment: 5000, utilized: 80000, remaining: 200000 })
+    )).toEqual({ developmentSpend: 500000, preSaleDeposits: 300000, refunded: 25000, pendingRefund: 0, adjustment: 5000, utilized: 80000, remaining: 200000 })
+  })
+
+  it('moves a pending buyer refund out of the deposit balance without treating the check as paid', () => {
+    const income = { type: 'pre_sale_deposit', amount: 10000, activities: [
+      { type: 'receipt', amount: 10000 },
+      { type: 'refund', amount: 10000, status: 'pending', paymentMethod: 'check' },
+    ] }
+    expect(summarizePreSaleDepositActivities(income)).toEqual({
+      received: 10000, applied: 0, refunded: 0, pendingRefund: 10000,
+      adjustment: 0, unreconciled: 0, remaining: 0,
+    })
+    expect(summarizeDevelopmentFunding([], [income])).toEqual({
+      developmentSpend: 0, preSaleDeposits: 10000, refunded: 0, pendingRefund: 10000,
+      adjustment: 0, utilized: 0, remaining: 0,
+    })
   })
 })

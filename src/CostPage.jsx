@@ -274,7 +274,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
   const [costEntryType, setCostEntryType] = useState(() => initialParentCost ? 'breakdown' : 'cost')
   const [pendingDeleteCostId, setPendingDeleteCostId] = useState(null)
   const [showVersionHistory, setShowVersionHistory] = useState(false)
-  const [breakdownSort, setBreakdownSort] = useState('amount_desc')
+  const [breakdownSort, setBreakdownSort] = useState('added_desc')
   const [expandedBreakdownIds, setExpandedBreakdownIds] = useState(() => new Set())
   const [expandedAttachmentIds, setExpandedAttachmentIds] = useState(() => new Set())
   const [attachingCostId, setAttachingCostId] = useState(null)
@@ -312,6 +312,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
   const [costAnalysisView, setCostAnalysisView] = useState('lot')
   const [costAnalysisSort, setCostAnalysisSort] = useState('amount_desc')
   const [costListView, setCostListView] = useState('detailed')
+  const [costCardOrder, setCostCardOrder] = useState('added_desc')
   const [costDateOrder, setCostDateOrder] = useState('desc')
   const [showFilteredReport, setShowFilteredReport] = useState(false)
   const [editorExpanded, setEditorExpanded] = useState(() => Boolean(initialParentCost || initialEditCostId || developmentCosts.length === 0))
@@ -462,8 +463,14 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
       const matchesDate = (!costDateFrom || String(cost.date || '') >= costDateFrom)
         && (!costDateTo || String(cost.date || '') <= costDateTo)
       return matchesSearch && matchesPhase && matchesOwner && matchesDate && matchesAdditionalCostFilters(cost)
+    }).sort((a, b) => {
+      const invoiceOrder = costCardOrder.startsWith('invoice_')
+      const dateFor = (cost) => String(invoiceOrder ? cost.date || addedDateFor(cost) || '' : addedDateFor(cost) || cost.date || '')
+      const comparison = dateFor(a).localeCompare(dateFor(b))
+      if (comparison !== 0) return costCardOrder.endsWith('_asc') ? comparison : -comparison
+      return String(a.name || '').localeCompare(String(b.name || ''))
     })
-  }, [addedDateFor, breakdownCosts, constructionDrafts, costDateFrom, costDateTo, costOwnerFilter, costPhaseFilter, costSearch, developmentCosts, matchesAdditionalCostFilters, ownerOptions])
+  }, [addedDateFor, breakdownCosts, constructionDrafts, costCardOrder, costDateFrom, costDateTo, costOwnerFilter, costPhaseFilter, costSearch, developmentCosts, matchesAdditionalCostFilters, ownerOptions])
 
   const dateOrderedCosts = useMemo(() => {
     const search = costSearch.trim().toLowerCase()
@@ -727,6 +734,10 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
 
   const sortBreakdowns = (items) => [...items].sort((a, b) => {
     const nameComparison = String(a.name || '').localeCompare(String(b.name || ''), undefined, { numeric: true, sensitivity: 'base' })
+    if (breakdownSort === 'added_desc' || breakdownSort === 'added_asc') {
+      const addedComparison = String(addedDateFor(a) || a.date || '').localeCompare(String(addedDateFor(b) || b.date || ''))
+      return (breakdownSort === 'added_asc' ? addedComparison : -addedComparison) || nameComparison
+    }
     if (breakdownSort === 'amount_desc') return Number(b.amount || 0) - Number(a.amount || 0) || nameComparison
     if (breakdownSort === 'amount_asc') return Number(a.amount || 0) - Number(b.amount || 0) || nameComparison
     if (breakdownSort === 'date_desc' || breakdownSort === 'date_asc') {
@@ -2203,18 +2214,31 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
             }} />
           </label>
           {costListView === 'detailed' ? (
-            <label className="cost-list-toolbar-secondary">
-              Sort breakdowns within each cost
-              <select aria-label="Sort breakdowns" value={breakdownSort} onChange={(event) => handleBreakdownSortChange(event.target.value)}>
-                <option value="amount_desc">Amount: highest first</option>
-                <option value="amount_asc">Amount: lowest first</option>
-                <option value="date_desc">Invoice date: newest first</option>
-                <option value="date_asc">Invoice date: oldest first</option>
-                <option value="name_asc">Description: A–Z</option>
-                <option value="name_desc">Description: Z–A</option>
-              </select>
-              <small>Changing the order opens breakdown groups so you can see the result.</small>
-            </label>
+            <>
+              <label className="cost-list-toolbar-secondary">
+                Cost order
+                <select aria-label="Order costs" value={costCardOrder} onChange={(event) => setCostCardOrder(event.target.value)}>
+                  <option value="added_desc">Newest added first</option>
+                  <option value="added_asc">Oldest added first</option>
+                  <option value="invoice_desc">Newest invoice first</option>
+                  <option value="invoice_asc">Oldest invoice first</option>
+                </select>
+              </label>
+              <label className="cost-list-toolbar-secondary">
+                Sort breakdowns within each cost
+                <select aria-label="Sort breakdowns" value={breakdownSort} onChange={(event) => handleBreakdownSortChange(event.target.value)}>
+                  <option value="added_desc">Newest added first</option>
+                  <option value="added_asc">Oldest added first</option>
+                  <option value="amount_desc">Amount: highest first</option>
+                  <option value="amount_asc">Amount: lowest first</option>
+                  <option value="date_desc">Invoice date: newest first</option>
+                  <option value="date_asc">Invoice date: oldest first</option>
+                  <option value="name_asc">Description: A–Z</option>
+                  <option value="name_desc">Description: Z–A</option>
+                </select>
+                <small>Changing the order opens breakdown groups so you can see the result.</small>
+              </label>
+            </>
           ) : (
             <label className="cost-list-toolbar-secondary">
               Invoice date order
@@ -2340,8 +2364,15 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
             const costCents = Math.round(Number(cost.amount || 0) * 100)
             const allocated = allocatedCents / 100
             const remaining = (costCents - allocatedCents) / 100
-            const breakdownsExpanded = expandedBreakdownIds.has(cost.costId)
+            const matchingChild = costSearch.trim() && children.some((child) => (
+              `${child.name} ${child.details || ''} ${child.category || ''}`.toLowerCase().includes(costSearch.trim().toLowerCase())
+            ))
+            const breakdownsExpanded = expandedBreakdownIds.has(cost.costId) || Boolean(matchingChild)
             const paymentState = paymentStateForCost(cost)
+            const isReimbursement = /reimburse/i.test(cost.name) && Boolean(cost.vendorName)
+            const plannedZelle = /\bzelle\b/i.test(`${cost.notes || ''} ${cost.details || ''}`)
+            const equalLotAmount = cost.lotAllocations?.length > 1
+              && cost.lotAllocations.every((entry) => Math.round(Number(entry.amount || 0) * 100) === Math.round(Number(cost.lotAllocations[0].amount || 0) * 100))
             const breakdownStatus = !children.length
               ? { key: 'none', label: 'Not broken down' }
               : remaining < 0
@@ -2355,7 +2386,15 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                   <header className="cost-record-header">
                     <div className="cost-record-identity">
                       <strong className="cost-record-title">{cost.name}</strong>
-                      {cost.details ? <p className="cost-record-description">{cost.details}</p> : null}
+                      {isReimbursement ? <div className="cost-reimbursement-summary" aria-label="Reimbursement summary">
+                        <strong>{paymentState.paid ? 'Reimbursed' : 'To reimburse'}: {cost.vendorName}</strong>
+                        <span>{paymentState.paid ? `Paid${plannedZelle ? ' by Zelle' : ''}${cost.paymentDate ? ` · ${cost.paymentDate}` : ''}` : plannedZelle ? 'Zelle planned · payment not recorded' : 'Payment not recorded'}</span>
+                        <span>{children.length} expense item{children.length === 1 ? '' : 's'} included in this total</span>
+                        {equalLotAmount ? <span>{cost.lotAllocations.length} lots · {currency.format(cost.lotAllocations[0].amount)} per lot</span> : null}
+                      </div> : null}
+                      {cost.details ? isReimbursement
+                        ? <details className="cost-source-notes"><summary>View source notes</summary><p>{cost.details}</p></details>
+                        : <p className="cost-record-description">{cost.details}</p> : null}
                       {cost.paymentFeePercentage != null ? <p className="cost-record-description">Card fee: {Number(cost.paymentFeePercentage).toFixed(2)}% of {currency.format(cost.invoiceAmount ?? (Number(cost.amount) - Number(cost.paymentFeeAmount || 0)))} = {currency.format(cost.paymentFeeAmount ?? (Number(cost.amount) - Number(cost.amount) / (1 + Number(cost.paymentFeePercentage) / 100)))} · Total {currency.format(cost.amount)}</p> : null}
                       <div className="cost-record-badges" aria-label="Cost metadata">
                         <span>{owner?.name || 'Owner'}</span>
@@ -2363,7 +2402,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                         <span>{cost.mainCategory || inferMainCostCategory(cost)}</span>
                         {cost.isSoftCostParent ? <span>Soft Cost parent</span> : null}
                         {cost.subcategory ? <span>{cost.subcategory}</span> : null}
-                        <span>{paymentState.paid ? 'Paid by' : 'Payment assigned to'} {payerLabel(cost, ownerOptions)}</span>
+                        {!isReimbursement ? <span>{paymentState.paid ? 'Paid by' : 'Payment assigned to'} {payerLabel(cost, ownerOptions)}</span> : null}
                         {cost.reimbursable ? <span>Reimbursable</span> : null}
                         {cost.loanRelated ? <span>Loan related</span> : null}
                         <span>{phaseLabel(cost.phase)}</span>
@@ -2408,14 +2447,15 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                       <button type="button" className="action-button" onClick={() => handleStartEdit(cost)}>Edit cost</button>
                       {onCreateCheck && !paymentState.activeChecks.length ? <button type="button" className="secondary-button" onClick={() => handleCreateCheckForCost(cost)}>{paymentState.voidedChecks.length ? 'Replacement check' : 'Create check'}</button> : null}
                       <button type="button" className="secondary-button" aria-label={`Add breakdown to ${cost.name}`} onClick={() => handleStartBreakdown(cost)}>Add breakdown</button>
-                      {children.length ? <button
+                      {children.length && matchingChild ? <span className="cost-matching-breakdowns">Matching expense items shown below</span> : null}
+                      {children.length && !matchingChild ? <button
                         type="button"
                         className="cost-accordion-button"
                         aria-expanded={breakdownsExpanded}
                         aria-controls={`cost-breakdowns-${cost.costId}`}
                         onClick={() => toggleBreakdowns(cost.costId)}
                       >
-                        <span>{breakdownsExpanded ? 'Hide breakdowns' : `Show breakdowns (${children.length})`}</span>
+                        <span>{isReimbursement ? (breakdownsExpanded ? 'Hide expense items' : `View ${children.length} expense items`) : (breakdownsExpanded ? 'Hide breakdowns' : `Show breakdowns (${children.length})`)}</span>
                         <span className="cost-control-chevron" aria-hidden="true">{breakdownsExpanded ? '▴' : '▾'}</span>
                       </button> : null}
                       {renderAttachmentArea(cost)}
@@ -2484,7 +2524,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                               <strong>↳ {child.name}</strong>
                             </label>
                           )}
-                          <p>{mergedItems.length ? 'Merged breakdown total' : `Breakdown of ${cost.name}`} • {phaseLabel(child.phase)} • {child.category || 'Uncategorized'} • {costAllocationLabel(child)} • {child.date}</p>
+                          <p>{mergedItems.length ? 'Merged breakdown total' : `Breakdown of ${cost.name}`} • {phaseLabel(child.phase)} • {child.category || 'Uncategorized'} • {costAllocationLabel(child)} • Invoice {child.date || 'not dated'}{addedDateFor(child) ? ` • Added ${displayDate(addedDateFor(child))}` : ''}</p>
                         </div>
                         <div className="cost-row-amount">{currency.format(child.amount)}</div>
                         <div className="button-row cost-row-actions">

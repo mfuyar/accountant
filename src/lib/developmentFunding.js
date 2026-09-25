@@ -12,19 +12,22 @@ export const isPreSaleDepositIncome = (income) => income?.type === 'pre_sale_dep
   || (normalizedName(income?.description).includes('pre sale deposit') && normalizedName(income?.description).includes('utilized'))
 
 export const summarizePreSaleDepositActivities = (income) => {
-  const summary = { received: 0, applied: 0, refunded: 0, adjustment: 0 }
+  const summary = { received: 0, applied: 0, refunded: 0, pendingRefund: 0, adjustment: 0 }
   ;(income?.activities || []).forEach((activity) => {
     const amount = Number(activity.amount || 0)
     if (activity.type === 'receipt') summary.received += amount
     else if (activity.type === 'application') summary.applied += amount
-    else if (activity.type === 'refund') summary.refunded += amount
+    else if (activity.type === 'refund') {
+      if (activity.status === 'pending') summary.pendingRefund += amount
+      else summary.refunded += amount
+    }
     else if (activity.type === 'adjustment_increase') summary.adjustment += amount
     else if (activity.type === 'adjustment_decrease') summary.adjustment -= amount
   })
   return {
     ...summary,
     unreconciled: Math.max(0, Number(income?.amount || 0) - summary.received),
-    remaining: Number(income?.amount || 0) + summary.adjustment - summary.applied - summary.refunded,
+    remaining: Number(income?.amount || 0) + summary.adjustment - summary.applied - summary.refunded - summary.pendingRefund,
   }
 }
 
@@ -77,22 +80,25 @@ export const summarizeDevelopmentFunding = (costs = [], incomes = []) => {
     ? masterTotal + Math.max(0, detailTotal - masterTotal)
     : detailTotal
   let refunded = 0
+  let pendingRefund = 0
   let adjustment = 0
   let recordedApplications = 0
   let hasRecordedApplications = false
   deposits.forEach((income) => {
     const activitySummary = summarizePreSaleDepositActivities(income)
     refunded += activitySummary.refunded
+    pendingRefund += activitySummary.pendingRefund
     adjustment += activitySummary.adjustment
     recordedApplications += activitySummary.applied
     if ((income.activities || []).some((activity) => activity.type === 'application')) hasRecordedApplications = true
   })
-  const available = Math.max(0, preSaleDeposits + adjustment - refunded)
+  const available = Math.max(0, preSaleDeposits + adjustment - refunded - pendingRefund)
   const utilized = Math.min(available, hasRecordedApplications ? recordedApplications : developmentSpend)
   return {
     developmentSpend,
     preSaleDeposits,
     refunded,
+    pendingRefund,
     adjustment,
     utilized,
     remaining: Math.max(0, available - utilized),

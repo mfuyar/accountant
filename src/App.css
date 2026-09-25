@@ -2776,6 +2776,47 @@ p.check-link-summary {
   -webkit-line-clamp: 2;
 }
 
+.cost-reimbursement-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 10px 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-size: 0.82rem;
+}
+
+.cost-reimbursement-summary strong {
+  flex-basis: 100%;
+  font-size: 0.9rem;
+}
+
+.cost-source-notes {
+  color: #475569;
+  font-size: 0.78rem;
+}
+
+.cost-source-notes summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.cost-source-notes p {
+  margin: 6px 0 0;
+  white-space: pre-line;
+}
+
+.cost-matching-breakdowns {
+  align-self: center;
+  color: #1d4ed8;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .cost-record-badges {
   display: flex;
   flex-wrap: wrap;
