@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { summarizeDevelopmentFunding } from './lib/developmentFunding'
 import { inferCostSubcategory, inferMainCostCategory, payerLabel } from './lib/accountingTaxonomy'
 import { currency } from './lib/currency'
+import { safeCsvText } from './lib/csvSecurity'
 
 const COST_CATEGORIES = [
   'Land cost', 'Permits & municipal fees', 'Site utilities', 'Site work', 'Foundation',
@@ -13,7 +14,7 @@ const COST_CATEGORIES = [
 const phaseLabel = (phase) => ({ development: 'Development', construction: 'Construction', soft_cost: 'Soft Cost', other: 'Other' }[phase] || phase || 'Other')
 
 const escapeCsvValue = (value) => {
-  const text = String(value ?? '')
+  const text = safeCsvText(value)
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
 }
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]))

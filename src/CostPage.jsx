@@ -9,6 +9,7 @@ import AttachmentPreviewModal from './AttachmentPreviewModal'
 import { identifyProvidenceLoan } from './lib/providenceLoanAccounts'
 import { COST_SUBCATEGORIES, MAIN_COST_CATEGORIES, inferMainCostCategory, payerLabel } from './lib/accountingTaxonomy'
 import { currency } from './lib/currency'
+import { safeCsvText } from './lib/csvSecurity'
 
 const phaseLabel = (phase) => ({
   development: 'Development',
@@ -68,7 +69,7 @@ const invoiceDateRangeForPreset = (preset, today = new Date()) => {
 }
 
 const csvCell = (value) => {
-  const text = String(value ?? '')
+  const text = safeCsvText(value)
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
 }
 

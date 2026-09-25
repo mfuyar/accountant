@@ -1,5 +1,5 @@
 import { PDFDocument } from 'pdf-lib'
-import { pdfjsLib } from './pdfjsSetup'
+import { loadSafePdf } from './pdfjsSetup'
 
 // Rasterizes each page of an oversized PDF (typically scanned commitment letters / plot plans)
 // and rebuilds a smaller PDF from re-compressed JPEG pages. Browsers have no native PDF
@@ -8,7 +8,7 @@ export async function compressPdfFile(file, maxBytes) {
   if (file.size <= maxBytes) return file
   try {
     const originalBytes = await file.arrayBuffer()
-    const pdf = await pdfjsLib.getDocument({ data: originalBytes }).promise
+    const pdf = await loadSafePdf({ data: originalBytes })
 
     let scale = 1.5
     let quality = 0.75

@@ -89,7 +89,7 @@ const requireProjectAdmin = async (caller: any, userId: string, projectId: numbe
     caller.from('profiles').select('is_global_admin').eq('id', userId).maybeSingle(),
     caller.from('project_members').select('role').eq('project_id', projectId).eq('user_id', userId).maybeSingle(),
   ])
-  if (!profile?.is_global_admin && membership?.role !== 'admin') throw new Error('Only a project administrator can manage bank connections.')
+  if (!profile?.is_global_admin && membership?.role !== 'project_admin') throw new Error('Only a project administrator can manage bank connections.')
 }
 
 const isGreenFortParty = (value: unknown) => {
@@ -151,7 +151,7 @@ Deno.serve(async (request) => {
 
     const body = await request.json()
     const projectId = Number(body.projectId)
-    if (!Number.isFinite(projectId)) return json({ error: 'Select a valid project.' }, 400)
+    if (!Number.isSafeInteger(projectId) || projectId <= 0) return json({ error: 'Select a valid project.' }, 400)
     await requireProjectAdmin(caller, authData.user.id, projectId)
 
     const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } })

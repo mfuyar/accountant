@@ -30,11 +30,19 @@ Configure these server-side secrets on the Supabase Edge Functions:
 Apply the database migrations, then deploy `extract-invoice`, `send-project-invite`, and
 `plaid-bank` with JWT verification enabled.
 The functions also validate the user and project membership themselves.
+Redeploy an Edge Function after changing its source; publishing the web app alone
+does not update server-side function code.
 
 ```sh
 npm install
 npm run dev
 ```
+
+Use Node.js 22.13 or newer for the current PDF viewer dependency. Keep `.env`
+private (`chmod 600 .env` on macOS/Linux) and never commit it. Before deploying,
+verify that the Supabase Storage bucket stays private, database row level security
+is enabled, and Edge Functions require JWTs. Only the Supabase URL and publishable
+key belong in the browser build.
 
 ## Verification
 

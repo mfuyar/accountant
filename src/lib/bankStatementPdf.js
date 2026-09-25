@@ -53,8 +53,8 @@ export function parseStatementText(text, { bank }) {
 }
 
 export async function extractPdfStatementRows(file, options) {
-  const { pdfjsLib } = await import('./pdfjsSetup')
-  const document = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise
+  const { loadSafePdf } = await import('./pdfjsSetup')
+  const document = await loadSafePdf({ data: await file.arrayBuffer() })
   const lines = []
   for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
     const page = await document.getPage(pageNumber)

@@ -3,6 +3,7 @@ import readXlsxFile from 'read-excel-file/browser'
 import { parseBankRows, parseCsv, taxTreatmentFor } from './lib/bankImport'
 import { extractPdfStatementRows } from './lib/bankStatementPdf'
 import { currency } from './lib/currency'
+import { safeCsvText } from './lib/csvSecurity'
 
 const bankNames = {
   boa: 'Bank of America',
@@ -11,7 +12,7 @@ const bankNames = {
   flagstar: 'Flagstar',
 }
 
-const csvCell = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`
+const csvCell = (value) => `"${safeCsvText(value).replaceAll('"', '""')}"`
 
 const downloadCsv = (filename, rows) => {
   const blob = new Blob([rows.map((row) => row.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' })

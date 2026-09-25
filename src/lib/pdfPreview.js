@@ -1,4 +1,4 @@
-import { pdfjsLib } from './pdfjsSetup'
+import { loadSafePdf } from './pdfjsSetup'
 
 // Renders PDF pages ourselves via pdf.js instead of relying on the browser's native <embed>/
 // <iframe> PDF viewer, which is unreliable for cross-origin signed URLs in Chrome (shows a
@@ -7,7 +7,7 @@ export async function loadPdfDocument(url) {
   const response = await fetch(url)
   if (!response.ok) throw new Error(`Could not load the document (HTTP ${response.status})`)
   const bytes = await response.arrayBuffer()
-  return pdfjsLib.getDocument({ data: bytes }).promise
+  return loadSafePdf({ data: bytes })
 }
 
 export async function renderPdfPageToDataUrl(pdf, pageNumber, maxWidth = 900) {

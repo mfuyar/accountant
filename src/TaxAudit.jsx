@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { currency } from './lib/currency'
+import { safeCsvText } from './lib/csvSecurity'
 
 const allLots = ['Lot 1', 'Lot 2', 'Lot 3', 'Lot 4']
 const IRS_1099_NEC_THRESHOLD = 600
@@ -10,7 +11,7 @@ const emptyCosts = []
 const emptyLotCommitments = []
 
 const escapeCsvValue = (value) => {
-  const stringValue = String(value ?? '')
+  const stringValue = safeCsvText(value)
   return /[",\n]/.test(stringValue) ? `"${stringValue.replace(/"/g, '""')}"` : stringValue
 }
 
