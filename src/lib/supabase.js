@@ -173,6 +173,7 @@ const normalizeCostVersion = (row) => ({
   paymentFeePercentage: row.payment_fee_percentage == null ? (getLegacyCostAccounting(row)?.paymentFeePercentage ?? null) : Number(row.payment_fee_percentage),
   paymentFeeAmount: row.payment_fee_amount == null ? (getLegacyCostAccounting(row)?.paymentFeeAmount ?? null) : Number(row.payment_fee_amount),
   paymentDate: row.payment_date || getLegacyCostAccounting(row)?.paymentDate || '',
+  paymentStatus: getLegacyCostAccounting(row)?.paymentStatus || '',
   invoiceAmount: row.invoice_amount == null ? (getLegacyCostAccounting(row)?.invoiceAmount ?? null) : Number(row.invoice_amount),
   amount: Number(row.amount || 0),
   phase: row.phase,
@@ -959,10 +960,11 @@ export async function createCostVersion(projectId, cost) {
   if (!supabase) throw new Error('Supabase is not configured')
   const costId = cost.costId || crypto.randomUUID()
   const detailsAttachment = cost.details ? [{ _type: 'cost_details', details: cost.details }] : []
-  const accountingAttachment = cost.constructionDraftId || cost.paymentMethod || cost.paymentFeePercentage != null || cost.paymentFeeAmount != null || cost.paymentDate || cost.invoiceAmount != null || cost.vendorName || cost.mainCategory || cost.subcategory || cost.payerType || cost.paymentSource || cost.referenceNumber || cost.reimbursable || cost.loanRelated || cost.notes || cost.recurringFrequency || cost.isSoftCostParent ? [{
+  const accountingAttachment = cost.constructionDraftId || cost.paymentMethod || cost.paymentStatus || cost.paymentFeePercentage != null || cost.paymentFeeAmount != null || cost.paymentDate || cost.invoiceAmount != null || cost.vendorName || cost.mainCategory || cost.subcategory || cost.payerType || cost.paymentSource || cost.referenceNumber || cost.reimbursable || cost.loanRelated || cost.notes || cost.recurringFrequency || cost.isSoftCostParent ? [{
     _type: 'cost_accounting',
     constructionDraftId: cost.constructionDraftId || null,
     paymentMethod: cost.paymentMethod || '',
+    paymentStatus: cost.paymentStatus || '',
     paymentFeePercentage: cost.paymentFeePercentage ?? null,
     paymentFeeAmount: cost.paymentFeeAmount ?? null,
     paymentDate: cost.paymentDate || null,
@@ -1004,7 +1006,7 @@ export async function createCostVersion(projectId, cost) {
     p_payment_fee_amount: cost.paymentFeeAmount ?? null,
     p_payment_date: cost.paymentDate || null,
     p_invoice_amount: cost.invoiceAmount ?? null,
-    p_attachments: cost.attachments || [],
+    p_attachments: [...(cost.attachments || []), ...accountingAttachment],
     p_vendor_name: cost.vendorName || null,
     p_main_category: cost.mainCategory || null,
     p_subcategory: cost.subcategory || null,

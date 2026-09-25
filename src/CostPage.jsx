@@ -295,6 +295,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
   const [paymentMethod, setPaymentMethod] = useState('')
   const [paymentFeePercentage, setPaymentFeePercentage] = useState('')
   const [paymentDate, setPaymentDate] = useState('')
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false)
   const [costSearch, setCostSearch] = useState('')
   const [costPhaseFilter, setCostPhaseFilter] = useState('all')
   const [costOwnerFilter, setCostOwnerFilter] = useState('all')
@@ -408,7 +409,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
       const activeChecks = linkedChecks.filter((check) => check.status !== 'voided')
       const printedChecks = activeChecks.filter((check) => check.status === 'printed')
       const voidedChecks = linkedChecks.filter((check) => check.status === 'voided')
-      const directlyPaid = printedChecks.length > 0
+      const directlyPaid = currentCost.paymentStatus === 'paid' || printedChecks.length > 0
         || (Boolean(currentCost.paymentDate) && (!isCheckPayment(currentCost.paymentMethod) || linkedChecks.length === 0))
       if (directlyPaid || visited.has(costId)) {
         return { paid: directlyPaid, paidByBreakdowns: false, activeChecks, printedChecks, voidedChecks }
@@ -977,6 +978,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
       paymentFeePercentage: isCreditCardPayment(paymentMethod) ? cardFeePercentage : null,
       paymentFeeAmount: paymentFeeAmount || null,
       paymentDate: paymentDate || null,
+      paymentStatus: !paymentDate && paymentConfirmed ? 'paid' : '',
       invoiceAmount: amount,
       amount: totalCostAmount,
       ownerId: selectedOwnerId,
@@ -1055,6 +1057,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
     setPaymentMethod('')
     setPaymentFeePercentage('')
     setPaymentDate('')
+    setPaymentConfirmed(false)
     setCostLot('')
     setSharedLotAmounts({})
     setAttachments([])
@@ -1098,6 +1101,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
       ? (isCreditCardPayment(cost.paymentMethod) ? DEFAULT_CARD_FEE_PERCENTAGE : '')
       : String(cost.paymentFeePercentage))
     setPaymentDate(cost.paymentDate || '')
+    setPaymentConfirmed(cost.paymentStatus === 'paid')
     const existingAllocations = cost.lotAllocations || []
     const isSingleLot = existingAllocations.length === 1 && Number(existingAllocations[0].amount) === Number(cost.amount)
     setCostLot(isSingleLot ? existingAllocations[0].lot : (existingAllocations.length ? 'Shared' : ''))
@@ -1149,6 +1153,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
     setPaymentMethod('')
     setPaymentFeePercentage('')
     setPaymentDate('')
+    setPaymentConfirmed(false)
     const parentAllocations = parentCost.lotAllocations || []
     const parentSingleLot = parentAllocations.length === 1 && Number(parentAllocations[0].amount) === Number(parentCost.amount)
     setCostLot(parentSingleLot ? parentAllocations[0].lot : '')
@@ -1184,6 +1189,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
     setPaymentMethod('')
     setPaymentFeePercentage('')
     setPaymentDate('')
+    setPaymentConfirmed(false)
     setCostLot('')
     setSharedLotAmounts({})
     setAttachments([])
@@ -1224,6 +1230,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
     setPaymentMethod('')
     setPaymentFeePercentage('')
     setPaymentDate('')
+    setPaymentConfirmed(false)
     setAttachments(draft.attachments || [])
     resetReceiptWorkflow()
     setFormError('')
@@ -1918,9 +1925,16 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
             </label> : null}
             <label>
               Payment date (optional)
-              <input aria-label="Payment date" type="date" value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} />
-              <small>Leave blank until the invoice is paid.</small>
+              <input aria-label="Payment date" type="date" value={paymentDate} onChange={(event) => {
+                setPaymentDate(event.target.value)
+                if (event.target.value) setPaymentConfirmed(false)
+              }} />
+              <small>Enter the actual payment date when known.</small>
             </label>
+            {!paymentDate ? <label className="checkbox-label">
+              <input aria-label="Paid, date not known" type="checkbox" checked={paymentConfirmed} onChange={(event) => setPaymentConfirmed(event.target.checked)} />
+              Paid, date not known
+            </label> : null}
             {(editingCostId || attachments.length) ? renderPaymentRecords(attachments, editingCostId ? checksForCost(editingCostId) : [], { showEmpty: true }) : null}
             {isCreditCardPayment(paymentMethod) && paymentFeePercentage !== '' ? <label>
               Total cost after card fee
@@ -2351,7 +2365,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                   <time role="cell" dateTime={cost.date || undefined}>{displayDate(cost.date)}</time>
                   <time role="cell" dateTime={addedDateFor(cost) || undefined}>{displayDate(addedDateFor(cost))}</time>
                   <span role="cell"><strong>{cost.name}</strong><small>{cost.details || (parent ? `Breakdown of ${parent.name}` : 'Top-level cost')}</small><em className={parent ? 'cost-row-kind detail' : 'cost-row-kind parent'}>{isMergedGroup ? 'Merged ledger group · counted once' : parent ? 'Breakdown detail · already included' : 'Parent total · counted once'}</em></span>
-                  <span role="cell"><strong>{owner?.name || 'Owner'}</strong><small>{phaseLabel(cost.phase)} · {cost.category || 'Uncategorized'}{job ? ` · ${job.name}` : ''} · {paymentState.paid ? (cost.paymentDate ? `Paid ${cost.paymentDate}` : paymentState.paidByBreakdowns ? 'Paid through breakdowns' : 'Paid by printed check') : 'Unpaid'}{paymentState.voidedChecks.length ? ' · Voided check excluded' : ''}</small><InvoicePaymentWarning invoiceDate={cost.date} paid={paymentState.paid} /></span>
+                  <span role="cell"><strong>{owner?.name || 'Owner'}</strong><small>{phaseLabel(cost.phase)} · {cost.category || 'Uncategorized'}{job ? ` · ${job.name}` : ''} · {paymentState.paid ? (cost.paymentDate ? `Paid ${cost.paymentDate}` : cost.paymentStatus === 'paid' ? 'Paid · date not recorded' : paymentState.paidByBreakdowns ? 'Paid through breakdowns' : 'Paid by printed check') : 'Unpaid'}{paymentState.voidedChecks.length ? ' · Voided check excluded' : ''}</small><InvoicePaymentWarning invoiceDate={cost.date} paid={paymentState.paid} /></span>
                   <span role="cell">{costAllocationLabel(cost)}</span>
                   <strong role="cell">{currency.format(cost.amount)}</strong>
                   <span role="cell"><button type="button" className="secondary-button" onClick={() => handleStartEdit(cost)}>Edit</button></span>
@@ -2413,7 +2427,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                         {cost.constructionDraftId ? <span>{constructionDrafts.find((draft) => String(draft.id) === String(cost.constructionDraftId))?.name || 'Mapped job'}</span> : null}
                         {cost.paymentMethod ? <span>{paymentMethodLabel(cost.paymentMethod)}</span> : null}
                         {cost.paymentFeePercentage != null ? <span>{Number(cost.paymentFeePercentage).toFixed(2)}% card fee</span> : null}
-                        {paymentState.paid ? <span>{cost.paymentDate ? `Paid ${cost.paymentDate}` : paymentState.paidByBreakdowns ? 'Paid through breakdowns' : 'Paid by printed check'}</span> : null}
+                        {paymentState.paid ? <span>{cost.paymentDate ? `Paid ${cost.paymentDate}` : cost.paymentStatus === 'paid' ? 'Paid · date not recorded' : paymentState.paidByBreakdowns ? 'Paid through breakdowns' : 'Paid by printed check'}</span> : null}
                         {!paymentState.paid ? <span className="payment-status-unpaid">Unpaid</span> : null}
                         <InvoicePaymentWarning invoiceDate={cost.date} paid={paymentState.paid} />
                       </div>

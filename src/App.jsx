@@ -862,10 +862,10 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
     setDevelopmentCostError('')
   }
 
-  const handleCostPageAdd = async ({ name, details = '', constructionDraftId = null, paymentMethod = null, paymentFeePercentage = null, paymentFeeAmount = null, paymentDate = null, invoiceAmount = null, amount, ownerId, phase, category = '', lotAllocations = [], date, attachments = [], parentCostId = null, vendorName = '', mainCategory = '', subcategory = '', payerType = '', payerOwnerId = null, payerName = '', paymentSource = '', referenceNumber = '', reimbursable = false, loanRelated = false, notes = '', recurringFrequency = '', isSoftCostParent = false }) => {
+  const handleCostPageAdd = async ({ name, details = '', constructionDraftId = null, paymentMethod = null, paymentStatus = '', paymentFeePercentage = null, paymentFeeAmount = null, paymentDate = null, invoiceAmount = null, amount, ownerId, phase, category = '', lotAllocations = [], date, attachments = [], parentCostId = null, vendorName = '', mainCategory = '', subcategory = '', payerType = '', payerOwnerId = null, payerName = '', paymentSource = '', referenceNumber = '', reimbursable = false, loanRelated = false, notes = '', recurringFrequency = '', isSoftCostParent = false }) => {
     const ledgerFields = { vendorName, mainCategory, subcategory, payerType, payerOwnerId, payerName, paymentSource, referenceNumber, reimbursable, loanRelated, notes, recurringFrequency, isSoftCostParent }
     if (persistenceEnabled) {
-      const saved = await createCostVersion(activeProjectId, { name, details, constructionDraftId, paymentMethod, paymentFeePercentage, paymentFeeAmount, paymentDate, invoiceAmount, amount, ownerId, phase, category, lotAllocations, date, attachments, parentCostId, ...ledgerFields })
+      const saved = await createCostVersion(activeProjectId, { name, details, constructionDraftId, paymentMethod, paymentStatus, paymentFeePercentage, paymentFeeAmount, paymentDate, invoiceAmount, amount, ownerId, phase, category, lotAllocations, date, attachments, parentCostId, ...ledgerFields })
       setDevelopmentCosts((current) => [...current, saved])
       if (!saved.parentCostId) {
         setPortfolioCostTotals((current) => ({
@@ -885,6 +885,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       details,
       constructionDraftId,
       paymentMethod,
+      paymentStatus,
       paymentFeePercentage,
       paymentFeeAmount,
       paymentDate,
@@ -915,7 +916,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
   const handleCostPageEdit = async ({ costId, ...updates }) => {
     if (persistenceEnabled) {
       const previous = getActiveCosts(projectCostVersions).find((cost) => cost.costId === costId)
-      const saved = await createCostVersion(activeProjectId, { costId, ...updates })
+      const saved = await createCostVersion(activeProjectId, { costId, ...updates, paymentStatus: updates.paymentStatus ?? previous?.paymentStatus ?? '' })
       setDevelopmentCosts((current) => [...current, saved])
       if (!saved.parentCostId) {
         setPortfolioCostTotals((current) => ({

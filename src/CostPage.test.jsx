@@ -81,6 +81,30 @@ describe('CostPage invoice extraction', () => {
     expect(cards()[0]).toHaveTextContent('Older entry')
   })
 
+  it('shows a confirmed payment without inventing a payment date', () => {
+    const paidCost = {
+      id: 1, costId: 'narron', version: 2, name: 'Ground Work — Narron', amount: 582964.27,
+      ownerId: 1, phase: 'development', date: '2026-05-31', paymentStatus: 'paid',
+      paymentDate: '', attachments: [], lotAllocations: [],
+    }
+    const { container } = render(<CostPage
+      owners={[{ id: 1, name: 'Green Fort' }]}
+      developmentCosts={[paidCost]}
+      costVersions={[paidCost]}
+      onBack={() => {}}
+      onAddDevelopmentCost={() => {}}
+      onEditDevelopmentCost={() => {}}
+      onDeleteDevelopmentCost={() => {}}
+    />)
+
+    const card = container.querySelector('.cost-record-card')
+    expect(card).toHaveTextContent('Paid · date not recorded')
+    expect(card).not.toHaveTextContent('Payment warning')
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit cost' }))
+    expect(screen.getByLabelText('Paid, date not known')).toBeChecked()
+    expect(screen.getByLabelText('Payment date')).toHaveValue('')
+  })
+
   it('shows a reimbursement clearly and reveals the matching expense when searched', () => {
     const reimbursement = {
       id: 1, costId: 'builders-expenses', version: 1,
