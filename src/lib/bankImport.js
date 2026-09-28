@@ -4,7 +4,7 @@ const headerAliases = {
   amount: ['amount', 'transactionamount', 'netamount'],
   debit: ['debit', 'debits', 'withdrawal', 'withdrawals'],
   credit: ['credit', 'credits', 'deposit', 'deposits'],
-  balance: ['balance', 'runningbalance', 'availablebalance'],
+  balance: ['balance', 'runningbalance', 'runningbal', 'availablebalance'],
   owner: ['owner', 'accountowner', 'customername', 'name'],
   account: ['account', 'accountname', 'accountnumber'],
   category: ['category'],
@@ -184,12 +184,17 @@ function reviewClassification({ amount, category, owner }) {
 }
 
 export function parseBankRows(rows, { bank, defaultOwner = 'Project / Unassigned', sourceName = 'Bank import' }) {
-  const headerIndex = rows.findIndex((row) => row.some((cell) => String(cell ?? '').trim()))
+  const headerIndex = rows.findIndex((row) => {
+    const headers = row.map(normalizeHeader)
+    return headers.some((header) => headerAliases.date.includes(header))
+      && headers.some((header) => [...headerAliases.amount, ...headerAliases.debit, ...headerAliases.credit].includes(header))
+  })
   if (headerIndex < 0) return []
   const headers = rows[headerIndex].map(normalizeHeader)
 
   const duplicateOccurrences = new Map()
-  return rows.slice(headerIndex + 1).filter((row) => row.some((cell) => String(cell ?? '').trim())).map((row) => {
+  return rows.slice(headerIndex + 1).filter((row) => row.some((cell) => String(cell ?? '').trim())
+    && !/^\s*(?:beginning|ending) balance as of\b/i.test(String(row[1] ?? ''))).map((row) => {
     const record = Object.fromEntries(headers.map((header, column) => [header || `column${column}`, row[column]]))
     const directAmount = parseMoney(valueFor(record, 'amount'))
     const debit = parseMoney(valueFor(record, 'debit'))
@@ -214,7 +219,7 @@ export function parseBankRows(rows, { bank, defaultOwner = 'Project / Unassigned
     const confidence = cleanText(valueFor(record, 'confidence'))
     const owner = detectOwner(record, bank, defaultOwner, amount, importedCategory)
     const classification = reviewClassification({ amount, category: importedCategory, owner })
-    const isFeeWaiver = amount === 0 && `${memo} ${rawDescription}`.toLowerCase().includes('fee waiver')
+    const isFeeWaiver = amount === 0 && `${description} ${memo} ${rawDescription}`.toLowerCase().includes('fee waiver')
     const category = isFeeWaiver ? 'Bank Fee Waiver' : classification.category
     const isOwnerContribution = amount > 0
       && category === 'Owner Contribution'

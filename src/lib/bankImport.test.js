@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { parseBankRows, parseCsv, taxTreatmentFor } from './bankImport'
 
 describe('bank spreadsheet parsing', () => {
+  it('skips a BofA CSV summary and opening balance before importing transactions', () => {
+    const rows = parseCsv('Description,,Summary Amt.\r\nBeginning balance as of 08/01/2026,,"3,410.44"\r\nTotal credits,,"257,980.00"\r\n\r\nDate,Description,Amount,Running Bal.\r\n08/01/2026,Beginning balance as of 08/01/2026,,"3,410.44"\r\n08/05/2026,Software,-3.17,"3,407.27"\r\n08/24/2026,Prfd Rwds for Bus-Wire Fee Waiver of $15,0.00,"3,407.27"')
+    const parsed = parseBankRows(rows, { bank: 'boa', sourceName: 'stmt (1).csv' })
+
+    expect(parsed).toHaveLength(2)
+    expect(parsed[0]).toMatchObject({ date: '2026-08-05', amount: -3.17, balance: 3407.27 })
+    expect(parsed[1]).toMatchObject({ category: 'Bank Fee Waiver', amount: 0, reviewReasons: [] })
+  })
+
   it('preserves an Excel UTC date without shifting it to the previous day', () => {
     const parsed = parseBankRows([
       ['Date', 'Description', 'Amount', 'Category'],
