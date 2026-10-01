@@ -218,7 +218,12 @@ Deno.serve(async (request) => {
     const { data: userData, error: userError } = await callerClient.auth.getUser()
     if (userError || !userData.user) return json({ error: 'Authentication required' }, 401)
 
-    const body = await request.json() as Record<string, unknown>
+    let body: Record<string, unknown>
+    try {
+      body = await request.json() as Record<string, unknown>
+    } catch {
+      return json({ error: 'The document request was unreadable. Upload the file again.' }, 400)
+    }
     const operationName = String(body.operation || 'invoice') as OperationName
     const operation = Object.hasOwn(operations, operationName) ? operations[operationName] : undefined
     const projectId = Number(body.projectId)
@@ -243,41 +248,50 @@ Deno.serve(async (request) => {
     parts.push({ text: operation.prompt(body) })
 
     const model = Deno.env.get('GEMINI_MODEL') || 'gemini-3.5-flash'
-    const geminiResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts }],
-          generationConfig: {
-            responseMimeType: 'application/json',
-            responseSchema: operation.schema,
-            maxOutputTokens: 2048,
-            temperature: 0.1,
-          },
-        }),
-        signal: AbortSignal.timeout(45_000),
-      },
-    )
+    for (const maxOutputTokens of [4096, 8192]) {
+      const geminiResponse = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts }],
+            generationConfig: {
+              responseMimeType: 'application/json',
+              responseSchema: operation.schema,
+              maxOutputTokens,
+              temperature: 0.1,
+            },
+          }),
+          signal: AbortSignal.timeout(45_000),
+        },
+      )
 
-    if (!geminiResponse.ok) {
-      const providerError = await geminiResponse.json().catch(() => ({}))
-      const reason = providerError?.error?.details?.find((detail: { reason?: string }) => detail.reason)?.reason
-      if (reason === 'API_KEY_INVALID' || geminiResponse.status === 401 || geminiResponse.status === 403) {
-        return json({ error: 'The analysis provider rejected its credentials. Update GEMINI_API_KEY in Supabase function secrets.' }, 502)
+      if (!geminiResponse.ok) {
+        const providerError = await geminiResponse.json().catch(() => ({}))
+        const reason = providerError?.error?.details?.find((detail: { reason?: string }) => detail.reason)?.reason
+        if (reason === 'API_KEY_INVALID' || geminiResponse.status === 401 || geminiResponse.status === 403) {
+          return json({ error: 'The analysis provider rejected its credentials. Update GEMINI_API_KEY in Supabase function secrets.' }, 502)
+        }
+        if (geminiResponse.status === 429) return json({ error: 'The analysis provider quota or rate limit was reached. Check Gemini billing/quota and retry.' }, 502)
+        if (geminiResponse.status === 404) return json({ error: 'The configured analysis model is unavailable. Check GEMINI_MODEL in Supabase function secrets.' }, 502)
+        return json({ error: `Document analysis provider failed (HTTP ${geminiResponse.status}). Retry or check the function configuration.` }, 502)
       }
-      if (geminiResponse.status === 429) return json({ error: 'The analysis provider quota or rate limit was reached. Check Gemini billing/quota and retry.' }, 502)
-      if (geminiResponse.status === 404) return json({ error: 'The configured analysis model is unavailable. Check GEMINI_MODEL in Supabase function secrets.' }, 502)
-      return json({ error: `Document analysis provider failed (HTTP ${geminiResponse.status}). Retry or check the function configuration.` }, 502)
-    }
-    const responseBody = await geminiResponse.json()
-    const text = responseBody?.candidates?.[0]?.content?.parts?.[0]?.text
-    if (!text) return json({ error: 'Document analysis returned no data' }, 502)
+      const responseBody = await geminiResponse.json().catch(() => null)
+      if (!responseBody) return json({ error: 'Document analysis returned an unreadable response. Try again.' }, 502)
+      const text = responseBody?.candidates?.[0]?.content?.parts
+        ?.map((part: { text?: string }) => part.text || '').join('').trim()
+      if (!text) return json({ error: 'Document analysis returned no data. Try again.' }, 502)
 
-    return json(JSON.parse(text))
-  } catch (error) {
-    if (error instanceof SyntaxError) return json({ error: 'Invalid JSON request or response' }, 400)
+      try {
+        return json(JSON.parse(text))
+      } catch {
+        if (maxOutputTokens === 8192) {
+          return json({ error: 'Document analysis returned incomplete data. Try again or enter the cost manually.' }, 502)
+        }
+      }
+    }
+  } catch {
     return json({ error: 'Document analysis failed' }, 500)
   }
 })
