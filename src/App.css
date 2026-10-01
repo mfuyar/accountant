@@ -1004,8 +1004,18 @@ p.check-link-summary {
 
 .envelope-screen-return-address {
   top: 8.75%;
-  left: 5%;
+  left: 2.78%;
   font-size: clamp(0.55rem, 1.15vw, 0.75rem);
+}
+
+.envelope-position-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+
+.envelope-position-controls small {
+  grid-column: 1 / -1;
 }
 
 .envelope-screen-recipient-address {
@@ -6591,10 +6601,8 @@ p.check-link-summary {
   }
 
   .print-envelope-return-address {
-    /* IMG_3822 physical calibration: with the required 180deg feed rotation, larger
-       source coordinates move this block toward the envelope's finished top-left. */
-    top: var(--envelope-return-top, 0.8in);
-    left: var(--envelope-return-left, 1.65in);
+    top: var(--envelope-return-top, 0.35in);
+    left: var(--envelope-return-left, 0.25in);
     font-size: 9pt;
   }
 

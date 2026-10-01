@@ -53,6 +53,25 @@ const defaultFieldOffsets = {
 }
 
 const FIELD_OFFSETS_STORAGE_KEY = 'greenfort-check-field-offsets'
+const ENVELOPE_RETURN_POSITION_STORAGE_KEY = 'greenfort-envelope-return-position'
+const defaultEnvelopeReturnPosition = { left: 0.25, top: 0.35 }
+
+const safeEnvelopePosition = (value, fallback, min, max) => {
+  const number = Number(value)
+  return Number.isFinite(number) && number >= min && number <= max ? number : fallback
+}
+
+const loadEnvelopeReturnPosition = () => {
+  try {
+    const saved = JSON.parse(window.localStorage?.getItem(ENVELOPE_RETURN_POSITION_STORAGE_KEY) || 'null')
+    return {
+      left: safeEnvelopePosition(saved?.left, defaultEnvelopeReturnPosition.left, -0.5, 3),
+      top: safeEnvelopePosition(saved?.top, defaultEnvelopeReturnPosition.top, -0.5, 2),
+    }
+  } catch {
+    return defaultEnvelopeReturnPosition
+  }
+}
 
 const loadSavedFieldOffsets = () => {
   try {
@@ -174,6 +193,7 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
   const [fieldOffsetsSavedMessage, setFieldOffsetsSavedMessage] = useState('')
   const [printerPreset, setPrinterPreset] = useState('letter_voucher')
   const [envelopeRotation, setEnvelopeRotation] = useState('180')
+  const [envelopeReturnPosition, setEnvelopeReturnPosition] = useState(loadEnvelopeReturnPosition)
   const [attachmentTarget, setAttachmentTarget] = useState('')
   const [fundingTarget, setFundingTarget] = useState('')
   const [lotTarget, setLotTarget] = useState('')
@@ -590,6 +610,18 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
     } catch {
       setFieldOffsetsSavedMessage('Could not save to this browser. Positions will reset next time you open the app.')
     }
+  }
+
+  const changeEnvelopeReturnPosition = (axis, value) => {
+    const number = Number(value)
+    const min = -0.5
+    const max = axis === 'left' ? 3 : 2
+    if (!Number.isFinite(number) || number < min || number > max) return
+    setEnvelopeReturnPosition((current) => {
+      const next = { ...current, [axis]: number }
+      try { window.localStorage?.setItem(ENVELOPE_RETURN_POSITION_STORAGE_KEY, JSON.stringify(next)) } catch { /* Printing still works without browser storage. */ }
+      return next
+    })
   }
 
   const changeSavedTemplate = async (nextTemplateKey) => {
@@ -1037,6 +1069,15 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
             </select>
             <small>Based on the test envelope, use Rotate 180°. Keep feeding the envelope the same way.</small>
           </label> : null}
+          {checkType !== 'internal_transfer' ? <div className="envelope-position-controls wide-field" role="group" aria-label="Return address position">
+            <label>Return address from left (inches)
+              <input type="number" min="-0.5" max="3" step="0.05" value={envelopeReturnPosition.left} onChange={(event) => changeEnvelopeReturnPosition('left', event.target.value)} />
+            </label>
+            <label>Return address from top (inches)
+              <input type="number" min="-0.5" max="2" step="0.05" value={envelopeReturnPosition.top} onChange={(event) => changeEnvelopeReturnPosition('top', event.target.value)} />
+            </label>
+            <small>Use a test envelope to adjust the return address. These positions are saved in this browser.</small>
+          </div> : null}
           {checkType !== 'internal_transfer' ? <label className="wide-field">Attach this check to
             <select ref={attachmentSelectRef} aria-label="Check accounting attachment" value={attachmentTarget} onChange={(event) => {
               setAllowAdditionalCheck(false)
@@ -1129,7 +1170,7 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
             </div>
           </div>
           <div className="envelope-screen-preview">
-            <address className="envelope-screen-return-address">
+            <address className="envelope-screen-return-address" style={{ left: `${envelopeReturnPosition.left / 9 * 100}%`, top: `${envelopeReturnPosition.top / 4 * 100}%` }}>
               <strong>Green Fort LLC</strong>
               <span>200 Rosa Bluff Ct</span>
               <span>Holly Springs, NC 27540</span>
@@ -1281,7 +1322,7 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
         </> : null}
       </div>
     </section>, document.body) : null}
-    {printingEnvelope ? createPortal(<section className="print-envelope-sheet" aria-label={`Printable envelope for ${printingEnvelope.payee}`} style={{ '--envelope-rotation': `${envelopeRotation}deg`, '--envelope-return-top': '0.8in', '--envelope-return-left': '1.65in' }}>
+    {printingEnvelope ? createPortal(<section className="print-envelope-sheet" aria-label={`Printable envelope for ${printingEnvelope.payee}`} style={{ '--envelope-rotation': `${envelopeRotation}deg`, '--envelope-return-top': `${envelopeReturnPosition.top}in`, '--envelope-return-left': `${envelopeReturnPosition.left}in` }}>
       <style>{'@page { size: 9in 4in; margin: 0; }'}</style>
       <address className="print-envelope-return-address">
         <strong>Green Fort LLC</strong>

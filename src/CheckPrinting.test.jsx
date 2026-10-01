@@ -362,7 +362,21 @@ describe('CheckPrinting', () => {
     expect(envelope).toHaveTextContent('Triangle Concrete')
     expect(envelope).toHaveTextContent('100 Vendor Way')
     expect(envelope.querySelector('style')).toHaveTextContent('@page { size: 9in 4in; margin: 0; }')
-    expect(envelope).toHaveStyle({ '--envelope-return-top': '0.8in', '--envelope-return-left': '1.65in' })
+    expect(envelope).toHaveStyle({ '--envelope-return-top': '0.35in', '--envelope-return-left': '0.25in' })
+    await waitFor(() => expect(printSpy).toHaveBeenCalled())
+    printSpy.mockRestore()
+  })
+
+  it('uses the saved return address position in the envelope preview and print layout', async () => {
+    const printSpy = vi.spyOn(window, 'print').mockImplementation(() => {})
+    render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} checks={[savedCheck]} />)
+
+    fireEvent.change(screen.getByLabelText('Return address from left (inches)'), { target: { value: '0.5' } })
+    fireEvent.change(screen.getByLabelText('Return address from top (inches)'), { target: { value: '0.4' } })
+    expect(screen.getByLabelText('Envelope preview for current check').querySelector('.envelope-screen-return-address')).toHaveStyle({ left: '5.555555555555555%', top: '10%' })
+    fireEvent.click(screen.getByRole('button', { name: 'Envelope' }))
+    expect(screen.getByLabelText('Printable envelope for Triangle Concrete')).toHaveStyle({ '--envelope-return-left': '0.5in', '--envelope-return-top': '0.4in' })
+    expect(JSON.parse(window.localStorage.getItem('greenfort-envelope-return-position'))).toEqual({ left: 0.5, top: 0.4 })
     await waitFor(() => expect(printSpy).toHaveBeenCalled())
     printSpy.mockRestore()
   })
