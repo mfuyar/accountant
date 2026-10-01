@@ -2,7 +2,24 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import AttachmentPreviewModal from './AttachmentPreviewModal'
 
+vi.mock('./lib/pdfPreview', () => ({
+  loadPdfDocument: vi.fn(),
+  renderPdfPageToDataUrl: vi.fn(),
+}))
+
+import { loadPdfDocument, renderPdfPageToDataUrl } from './lib/pdfPreview'
+
 describe('AttachmentPreviewModal', () => {
+  it('renders an attached PDF without loading a deferred preview module', async () => {
+    const attachment = { name: 'Draw 10_2_2026.pdf', mimeType: 'application/pdf' }
+    loadPdfDocument.mockResolvedValue({ numPages: 1 })
+    renderPdfPageToDataUrl.mockResolvedValue('data:image/png;base64,cGFnZQ==')
+    render(<AttachmentPreviewModal attachment={attachment} onGetUrl={vi.fn().mockResolvedValue('https://example.test/draw.pdf')} onClose={vi.fn()} />)
+
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Draw 10_2_2026.pdf — page 1' })).toHaveAttribute('src', 'data:image/png;base64,cGFnZQ=='))
+    expect(loadPdfDocument).toHaveBeenCalledWith('https://example.test/draw.pdf')
+  })
+
   it('previews an image and offers download and close actions', async () => {
     const attachment = { name: 'permit.png', mimeType: 'image/png', storagePath: '2/permit.png' }
     const onGetUrl = vi.fn().mockResolvedValue('https://example.test/permit.png')

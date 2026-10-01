@@ -4,6 +4,11 @@ import CostPage from './CostPage'
 import { extractTransactionFromImage } from './lib/gemini'
 import { extractPdfDocumentText } from './lib/pdfText'
 
+vi.mock('./lib/pdfPreview', () => ({
+  loadPdfDocument: vi.fn(),
+  renderPdfPageToDataUrl: vi.fn(),
+}))
+
 vi.mock('./lib/gemini', () => ({
   extractTransactionFromImage: vi.fn().mockResolvedValue({
     vendor: 'Horizon Concrete',

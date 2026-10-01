@@ -5,6 +5,11 @@ import App, { getConstructionLotCostTotals, getCostAmountForLotFilter, getPhaseT
 import ClassificationPage from './ClassificationPage'
 import { extractTransactionFromImage } from './lib/gemini'
 
+vi.mock('./lib/pdfPreview', () => ({
+  loadPdfDocument: vi.fn(),
+  renderPdfPageToDataUrl: vi.fn(),
+}))
+
 describe('App', () => {
   it('rebalances an increased parent total evenly across its existing lots', () => {
     expect(splitExistingLotAllocationsEvenly(424238, [

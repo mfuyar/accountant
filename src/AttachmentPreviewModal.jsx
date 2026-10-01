@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { loadPdfDocument, renderPdfPageToDataUrl } from './lib/pdfPreview'
 
 function AttachmentPreviewModal({ attachment, onClose, onGetUrl, onDownload, paidWatermark = null }) {
   const [url, setUrl] = useState('')
@@ -25,7 +26,6 @@ function AttachmentPreviewModal({ attachment, onClose, onGetUrl, onDownload, pai
       if (cancelled) return
       setUrl(signedUrl)
       if (isPdf) {
-        const { loadPdfDocument } = await import('./lib/pdfPreview')
         const document = await loadPdfDocument(signedUrl)
         if (!cancelled) setPdf(document)
       }
@@ -38,7 +38,7 @@ function AttachmentPreviewModal({ attachment, onClose, onGetUrl, onDownload, pai
   useEffect(() => {
     if (!pdf) return
     let cancelled = false
-    import('./lib/pdfPreview').then(({ renderPdfPageToDataUrl }) => renderPdfPageToDataUrl(pdf, page)).then((image) => {
+    renderPdfPageToDataUrl(pdf, page).then((image) => {
       if (!cancelled) setPageImage(image)
     }).catch((pageError) => {
       if (!cancelled) setError(pageError.message || 'The PDF page could not be rendered.')
@@ -53,7 +53,6 @@ function AttachmentPreviewModal({ attachment, onClose, onGetUrl, onDownload, pai
     try {
       let pages = []
       if (pdf) {
-        const { renderPdfPageToDataUrl } = await import('./lib/pdfPreview')
         for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
           // Sequential rendering keeps large multi-page invoices from exhausting browser memory.
           // eslint-disable-next-line no-await-in-loop
@@ -84,7 +83,7 @@ function AttachmentPreviewModal({ attachment, onClose, onGetUrl, onDownload, pai
         <button type="button" className="secondary-button" onClick={onClose}>Close</button>
       </div>
       <div className="document-preview-body">
-        {error ? <p className="validation-error" role="alert">{error}</p> : null}
+        {error ? <div className="cost-empty-state" role="alert"><strong>Preview unavailable</strong><p>Refresh the page to try again, or download the original document below.</p></div> : null}
         {!url && !error ? <p>Loading preview…</p> : null}
         {url && isPdf && !pageImage && !error ? <p>Rendering PDF preview…</p> : null}
         {url && isImage ? <div className={`document-preview-page${paidWatermark ? ' paid-invoice-preview-page' : ''}`}><img className="document-preview-media" src={url} alt={attachment.name} />{paidWatermark ? <span className="paid-invoice-preview-watermark">PAID</span> : null}</div> : null}
@@ -99,6 +98,7 @@ function AttachmentPreviewModal({ attachment, onClose, onGetUrl, onDownload, pai
         </div>
       ) : null}
       <div className="button-row document-preview-actions">
+        {error ? <button type="button" className="secondary-button" onClick={() => window.location.reload()}>Refresh page</button> : null}
         {paidWatermark ? <button type="button" className="action-button" disabled={preparingPrint || (!pdf && !url)} onClick={printPaidCopy}>{preparingPrint ? 'Preparing paid copy…' : 'Print invoice with PAID watermark'}</button> : null}
         {onDownload ? <button type="button" className="secondary-button" onClick={() => onDownload(attachment)}>Download a copy</button> : null}
       </div>
