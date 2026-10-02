@@ -1004,7 +1004,7 @@ p.check-link-summary {
 
 .envelope-screen-return-address {
   top: 8.75%;
-  left: 2.78%;
+  left: 0;
   font-size: clamp(0.55rem, 1.15vw, 0.75rem);
 }
 
@@ -6602,7 +6602,7 @@ p.check-link-summary {
 
   .print-envelope-return-address {
     top: var(--envelope-return-top, 0.35in);
-    left: var(--envelope-return-left, 0.25in);
+    left: var(--envelope-return-left, 0in);
     font-size: 9pt;
   }
 

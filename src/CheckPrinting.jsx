@@ -54,7 +54,7 @@ const defaultFieldOffsets = {
 
 const FIELD_OFFSETS_STORAGE_KEY = 'greenfort-check-field-offsets'
 const ENVELOPE_RETURN_POSITION_STORAGE_KEY = 'greenfort-envelope-return-position'
-const defaultEnvelopeReturnPosition = { left: 0.25, top: 0.35 }
+const defaultEnvelopeReturnPosition = { left: 0, top: 0.35 }
 
 const safeEnvelopePosition = (value, fallback, min, max) => {
   const number = Number(value)
@@ -150,6 +150,11 @@ const costMemo = (cost) => {
 }
 
 const costMailingAddress = (cost) => (cost?.attachments || []).find((entry) => entry.vendorMailingAddress)?.vendorMailingAddress || ''
+
+const envelopeAddressLinesFor = (address) => String(address || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).flatMap((line) => {
+  const boxAndCity = line.match(/^((?:P\.?\s*O\.?\s*Box)\s+[^,]+),\s*(.+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?)$/i)
+  return boxAndCity ? [boxAndCity[1], boxAndCity[2]] : [line]
+})
 
 const errorMessage = (error, fallback = 'Unknown error') => {
   if (error instanceof Error && error.message) return error.message
@@ -943,7 +948,7 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
   const envelopePreview = viewingCheck
     ? { payee: viewingCheck.payee || '', mailingAddress: mailingAddressForCheck(viewingCheck) }
     : { payee, mailingAddress }
-  const envelopeAddressLines = String(envelopePreview.mailingAddress || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const envelopeAddressLines = envelopeAddressLinesFor(envelopePreview.mailingAddress)
 
   return <>
     <section className="section-grid check-printing-layout">
@@ -1331,7 +1336,7 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
       </address>
       <address className="print-envelope-recipient-address">
         <strong>{printingEnvelope.payee}</strong>
-        {printingEnvelope.mailingAddress.split(/\r?\n/).filter(Boolean).map((line, index) => <span key={`${line}-${index}`}>{line}</span>)}
+        {envelopeAddressLinesFor(printingEnvelope.mailingAddress).map((line, index) => <span key={`${line}-${index}`}>{line}</span>)}
       </address>
     </section>, document.body) : null}
     {printingTemplateSheet ? createPortal(<section className="print-template-sheet" aria-label="Printable BOFA and Flagstar template sheet">
