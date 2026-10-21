@@ -6901,3 +6901,16 @@ p.check-link-summary {
   font-size: 12px;
   font-weight: 600;
 }
+
+.cost-payment-balance {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+.cost-payment-balance > div { display: flex; flex-direction: column; gap: 2px; }
+.cost-payment-balance small { color: #64748b; font-size: 0.75rem; }
+.cost-payment-balance strong { color: #334155; font-variant-numeric: tabular-nums; }
+.cost-payment-balance > small { grid-column: 1 / -1; }

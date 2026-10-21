@@ -9,6 +9,7 @@ import AttachmentPreviewModal from './AttachmentPreviewModal'
 import { identifyProvidenceLoan } from './lib/providenceLoanAccounts'
 import { COST_SUBCATEGORIES, MAIN_COST_CATEGORIES, inferMainCostCategory, payerLabel } from './lib/accountingTaxonomy'
 import { currency } from './lib/currency'
+import { paymentBalance } from './lib/paymentBalance'
 import { safeCsvText } from './lib/csvSecurity'
 
 const phaseLabel = (phase) => ({
@@ -403,27 +404,19 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
 
   const checksForCost = useCallback((costId) => projectChecks.filter((check) => check.costId === costId && check.checkType !== 'internal_transfer'), [projectChecks])
   const paymentStateForCost = useCallback((cost) => {
-    const stateFor = (currentCost, visited = new Set()) => {
-      const costId = String(currentCost.costId ?? currentCost.id)
-      const linkedChecks = checksForCost(currentCost.costId)
-      const activeChecks = linkedChecks.filter((check) => check.status !== 'voided')
-      const printedChecks = activeChecks.filter((check) => check.status === 'printed')
-      const voidedChecks = linkedChecks.filter((check) => check.status === 'voided')
-      const directlyPaid = currentCost.paymentStatus === 'paid' || printedChecks.length > 0
-        || (Boolean(currentCost.paymentDate) && (!isCheckPayment(currentCost.paymentMethod) || linkedChecks.length === 0))
-      if (directlyPaid || visited.has(costId)) {
-        return { paid: directlyPaid, paidByBreakdowns: false, activeChecks, printedChecks, voidedChecks }
-      }
-
-      const children = breakdownCosts.filter((entry) => String(entry.parentCostId) === costId)
-      const childTotalCents = children.reduce((sum, entry) => sum + Math.round(Number(entry.amount || 0) * 100), 0)
-      const fullyBrokenDown = children.length > 0 && childTotalCents === Math.round(Number(currentCost.amount || 0) * 100)
-      const nextVisited = new Set(visited).add(costId)
-      const paidByBreakdowns = fullyBrokenDown && children.every((child) => stateFor(child, nextVisited).paid)
-      return { paid: paidByBreakdowns, paidByBreakdowns, activeChecks, printedChecks, voidedChecks }
+    const balance = paymentBalance(cost, [...developmentCosts, ...breakdownCosts], projectChecks)
+    const linkedChecks = checksForCost(cost.costId)
+    const activeChecks = linkedChecks.filter((check) => check.status !== 'voided')
+    return {
+      ...balance,
+      paidAmount: balance.paid,
+      paid: balance.remaining === 0,
+      paidByBreakdowns: balance.remaining === 0 && !linkedChecks.some((check) => check.status === 'printed') && breakdownCosts.some((entry) => entry.parentCostId === cost.costId),
+      activeChecks,
+      printedChecks: linkedChecks.filter((check) => check.status === 'printed'),
+      voidedChecks: linkedChecks.filter((check) => check.status === 'voided'),
     }
-    return stateFor(cost)
-  }, [breakdownCosts, checksForCost])
+  }, [developmentCosts, breakdownCosts, projectChecks, checksForCost])
 
   const matchesAdditionalCostFilters = useCallback((cost) => {
     const allocations = cost.lotAllocations || []
@@ -1619,8 +1612,8 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
   const handleCreateCheckForCost = (cost) => {
     if (!onCreateCheck) return
     const state = paymentStateForCost(cost)
-    if (state.activeChecks.length) {
-      setFormError(`This cost already has active check ${state.activeChecks.map((check) => `#${check.checkNumber}`).join(', ')}. Open Checks if you need to record an intentional partial payment.`)
+    if (state.remaining <= 0) {
+      setFormError('This cost is already fully paid.')
       return
     }
     const analyzedAttachment = (cost.attachments || []).find((attachment) => attachment.vendor || attachment.reference || attachment.vendorMailingAddress)
@@ -1629,7 +1622,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
     onCreateCheck({
       costId: cost.costId,
       payee: analyzedAttachment?.vendor || cost.name,
-      amount: cost.amount,
+      amount: state.remaining,
       memo: checkMemoForCost(cost.name, cost.details, analyzedAttachment, checkLot),
       mailingAddress: analyzedAttachment?.vendorMailingAddress || '',
       lot: checkLot,
@@ -2446,7 +2439,12 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                     </div>
                   </div> : null}
 
-                  {renderPaymentRecords(cost.attachments, checksForCost(cost.costId))}
+                  <div className="cost-payment-balance" aria-label="Payment balance">
+                    <div><small>Invoice / cost total</small><strong>{currency.format(cost.amount)}</strong></div>
+                    <div><small>Already paid</small><strong>{currency.format(paymentState.paidAmount)}</strong></div>
+                    <div><small>{paymentState.overpaid > 0 ? 'Overpaid' : 'Remaining to pay'}</small><strong>{currency.format(paymentState.overpaid || paymentState.remaining)}</strong></div>
+                  </div>
+                  {renderPaymentRecords(cost.attachments, paymentState.checks)}
 
                   {children.length ? <div className="cost-allocation-summary" aria-label="Breakdown summary">
                     <div><small>Broken down</small><strong>{currency.format(allocated)}</strong></div>
@@ -2460,7 +2458,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
                   <footer className="cost-record-footer">
                     <div className="cost-record-main-actions">
                       <button type="button" className="action-button" onClick={() => handleStartEdit(cost)}>Edit cost</button>
-                      {onCreateCheck && !paymentState.activeChecks.length ? <button type="button" className="secondary-button" onClick={() => handleCreateCheckForCost(cost)}>{paymentState.voidedChecks.length ? 'Replacement check' : 'Create check'}</button> : null}
+                      {onCreateCheck && paymentState.remaining > 0 ? <button type="button" className="secondary-button" onClick={() => handleCreateCheckForCost(cost)}>{paymentState.voidedChecks.length ? 'Replacement check' : 'Create check'}</button> : null}
                       <button type="button" className="secondary-button" aria-label={`Add breakdown to ${cost.name}`} onClick={() => handleStartBreakdown(cost)}>Add breakdown</button>
                       {children.length && matchingChild ? <span className="cost-matching-breakdowns">Matching expense items shown below</span> : null}
                       {children.length && !matchingChild ? <button

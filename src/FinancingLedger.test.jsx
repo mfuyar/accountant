@@ -30,7 +30,7 @@ describe('FinancingLedger', () => {
     fireEvent.change(screen.getByLabelText('Financing amount'), { target: { value: '4000' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save entry' }))
     await waitFor(() => expect(props.onSave).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'owner_distribution', counterparty: 'Habitech Builders', ownerId: null, amount: 4000,
+      type: 'owner_distribution', counterparty: 'Habitech Builders and Realty, Inc', ownerId: null, amount: 4000,
     })))
   })
 

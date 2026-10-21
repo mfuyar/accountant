@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState } from 'react'
 import { currency } from './lib/currency'
 
+const BUILDER_NAME = 'Habitech Builders and Realty, Inc'
+
 const today = () => new Date().toLocaleDateString('en-CA')
 
 const typeLabels = {
@@ -84,7 +86,7 @@ function FinancingLedger({ project, owners = [], entries = [], onSave, onDelete,
   }, [completed])
 
   const normalizedCounterparty = type === 'owner_distribution'
-    ? ownerId === 'habitech_builder' ? 'Habitech Builders' : owners.find((owner) => String(owner.id) === String(ownerId))?.name || counterparty.trim()
+    ? ownerId === 'habitech_builder' ? BUILDER_NAME : owners.find((owner) => String(owner.id) === String(ownerId))?.name || counterparty.trim()
     : counterparty.trim()
   const duplicate = entries.find((entry) => (
     entry.type === type
@@ -197,7 +199,7 @@ function FinancingLedger({ project, owners = [], entries = [], onSave, onDelete,
 
   const startEdit = (entry) => {
     setEditingEntryId(entry.id)
-    setEditDraft({ ...entry, amount: String(entry.amount), ownerId: entry.ownerId ? String(entry.ownerId) : entry.counterparty === 'Habitech Builders' ? 'habitech_builder' : '' })
+    setEditDraft({ ...entry, amount: String(entry.amount), ownerId: entry.ownerId ? String(entry.ownerId) : ['Habitech Builders', BUILDER_NAME].includes(entry.counterparty) ? 'habitech_builder' : '' })
     setMessage(null)
   }
 
@@ -264,7 +266,7 @@ function FinancingLedger({ project, owners = [], entries = [], onSave, onDelete,
             {Object.entries(typeLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
           </select></label>
           <label>Status<select aria-label="Financing entry status" value={status} onChange={(event) => { setStatus(event.target.value); setAllowDuplicate(false) }}><option value="planned">Planned / budgeted</option><option value="completed">Completed</option></select></label>
-          {type === 'owner_distribution' ? <label>Owner<select aria-label="Payout owner" value={ownerId} onChange={(event) => setOwnerId(event.target.value)}><option value="">Select owner</option><option value="habitech_builder">Builder — Habitech Builders</option>{owners.map((owner) => <option key={owner.id} value={owner.id}>{owner.name}</option>)}</select></label>
+          {type === 'owner_distribution' ? <label>Owner<select aria-label="Payout owner" value={ownerId} onChange={(event) => setOwnerId(event.target.value)}><option value="">Select owner</option><option value="habitech_builder">Builder — {BUILDER_NAME}</option>{owners.map((owner) => <option key={owner.id} value={owner.id}>{owner.name}</option>)}</select></label>
             : <label>{type === 'loan_received' ? 'Private lender' : 'Pay to lender'}<input aria-label="Financing counterparty" value={counterparty} onChange={(event) => setCounterparty(event.target.value)} placeholder="Person or company name" /></label>}
           <label>Amount<span className="currency-input"><span aria-hidden="true">$</span><input aria-label="Financing amount" type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></span></label>
           <label>{status === 'planned' ? 'Planned date' : 'Completed date'}<input aria-label="Financing date" type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
@@ -317,12 +319,21 @@ function FinancingLedger({ project, owners = [], entries = [], onSave, onDelete,
             </div>
             <span className={`financing-entry-status ${entry.status}`}>{entry.status}</span>
             <strong className={cashDirection(entry.type) > 0 ? 'cash-in' : 'cash-out'}>{cashDirection(entry.type) > 0 ? '+' : '−'}{currency.format(entry.amount)}</strong>
-            <div className="button-row">{onUpdate ? <button type="button" className="secondary-button" onClick={() => startEdit(entry)}>Edit</button> : null}{onStatusChange ? <button type="button" className="secondary-button" onClick={() => changeStatus(entry, entry.status === 'planned' ? 'completed' : 'planned')}>{entry.status === 'planned' ? 'Mark completed' : 'Move to planned'}</button> : null}{pendingDeleteId === entry.id ? <><button type="button" className="danger-button" onClick={() => deleteEntry(entry)}>Confirm remove</button><button type="button" className="secondary-button" onClick={() => setPendingDeleteId(null)}>Cancel</button></> : <button type="button" className="secondary-button" onClick={() => setPendingDeleteId(entry.id)}>Remove</button>}</div>
+            <div className="button-row">
+              {entry.status === 'planned' && isPayment(entry.type) && onPrepareCheck ? <button type="button" className="secondary-button" onClick={() => onPrepareCheck({
+                payee: entry.counterparty,
+                amount: entry.amount,
+                date: entry.date,
+                memo: `${typeLabels[entry.type]}${entry.reference ? ` · ${entry.reference}` : ''}`,
+                mailingAddress: '',
+              })}>Write a check</button> : null}
+              {onUpdate ? <button type="button" className="secondary-button" onClick={() => startEdit(entry)}>Edit</button> : null}{onStatusChange ? <button type="button" className="secondary-button" onClick={() => changeStatus(entry, entry.status === 'planned' ? 'completed' : 'planned')}>{entry.status === 'planned' ? 'Mark completed' : 'Move to planned'}</button> : null}{pendingDeleteId === entry.id ? <><button type="button" className="danger-button" onClick={() => deleteEntry(entry)}>Confirm remove</button><button type="button" className="secondary-button" onClick={() => setPendingDeleteId(null)}>Cancel</button></> : <button type="button" className="secondary-button" onClick={() => setPendingDeleteId(entry.id)}>Remove</button>}
+            </div>
             {editingEntryId === entry.id && editDraft ? <div className="financing-inline-edit" aria-label={`Edit financing entry ${entry.id}`}>
               <label>Type<select aria-label={`Edit type for ${entry.id}`} value={editDraft.type} onChange={(event) => setEditDraft((current) => ({ ...current, type: event.target.value }))}>{Object.entries(typeLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
               <label>Status<select aria-label={`Edit status for ${entry.id}`} value={editDraft.status} onChange={(event) => setEditDraft((current) => ({ ...current, status: event.target.value }))}><option value="planned">Planned</option><option value="completed">Completed</option></select></label>
               <label>Payee / counterparty<input aria-label={`Edit counterparty for ${entry.id}`} value={editDraft.counterparty} onChange={(event) => setEditDraft((current) => ({ ...current, counterparty: event.target.value }))} /></label>
-              {editDraft.type === 'owner_distribution' ? <label>Owner<select aria-label={`Edit owner for ${entry.id}`} value={editDraft.ownerId} onChange={(event) => { const owner = owners.find((item) => String(item.id) === event.target.value); setEditDraft((current) => ({ ...current, ownerId: event.target.value, counterparty: event.target.value === 'habitech_builder' ? 'Habitech Builders' : owner?.name || current.counterparty })) }}><option value="">Select owner</option><option value="habitech_builder">Builder — Habitech Builders</option>{owners.map((owner) => <option key={owner.id} value={owner.id}>{owner.name}</option>)}</select></label> : null}
+              {editDraft.type === 'owner_distribution' ? <label>Owner<select aria-label={`Edit owner for ${entry.id}`} value={editDraft.ownerId} onChange={(event) => { const owner = owners.find((item) => String(item.id) === event.target.value); setEditDraft((current) => ({ ...current, ownerId: event.target.value, counterparty: event.target.value === 'habitech_builder' ? BUILDER_NAME : owner?.name || current.counterparty })) }}><option value="">Select owner</option><option value="habitech_builder">Builder — {BUILDER_NAME}</option>{owners.map((owner) => <option key={owner.id} value={owner.id}>{owner.name}</option>)}</select></label> : null}
               <label>Amount<input aria-label={`Edit amount for ${entry.id}`} type="number" min="0.01" step="0.01" value={editDraft.amount} onChange={(event) => setEditDraft((current) => ({ ...current, amount: event.target.value }))} /></label>
               <label>Date<input aria-label={`Edit date for ${entry.id}`} type="date" value={editDraft.date} onChange={(event) => setEditDraft((current) => ({ ...current, date: event.target.value }))} /></label>
               <label>Payment method<select aria-label={`Edit payment method for ${entry.id}`} value={editDraft.paymentMethod} onChange={(event) => setEditDraft((current) => ({ ...current, paymentMethod: event.target.value }))}><option value="">Not specified</option><option value="check">Check</option><option value="bank_transfer">ACH / bank transfer</option><option value="bofa_zelle">Zelle from BOFA</option><option value="amex_business">Amex Business usage</option><option value="other_credit_card">Other credit card usage</option><option value="cash">Cash</option><option value="other">Other</option></select></label>

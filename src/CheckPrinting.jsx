@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { amountToCheckWords } from './lib/checks'
 import { currency } from './lib/currency'
+import { paymentBalance } from './lib/paymentBalance'
 
 const today = () => new Date().toLocaleDateString('en-CA')
 const numericAmount = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -246,13 +247,14 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
     const linkedCost = initialDraft.costId ? costs.find((cost) => String(cost.costId) === String(initialDraft.costId)) : null
     const linkedInvoice = initialDraft.invoiceId ? invoices.find((invoice) => Number(invoice.id) === Number(initialDraft.invoiceId)) : null
     setPayee(initialDraft.payee || '')
-    setAmount(initialDraft.amount == null ? '' : String(initialDraft.amount))
+    const linkedBalance = linkedCost || linkedInvoice ? paymentBalance(linkedCost || linkedInvoice, costs, checks, invoices) : null
+    setAmount(linkedBalance ? String(Math.min(Number(initialDraft.amount ?? linkedBalance.remaining), linkedBalance.remaining)) : initialDraft.amount == null ? '' : String(initialDraft.amount))
     setCheckDate(initialDraft.date || today())
     setMemo(initialDraft.memo || '')
     setCheckType(initialDraft.checkType || 'payment')
     setDestinationAccount(initialDraft.destinationAccount || '')
     setMailingAddress(initialDraft.mailingAddress || costMailingAddress(linkedCost) || linkedInvoice?.vendorMailingAddress || linkedInvoice?.mailingAddress || '')
-    setAttachmentTarget(initialDraft.costId ? `cost:${initialDraft.costId}` : '')
+    setAttachmentTarget(initialDraft.costId ? `cost:${initialDraft.costId}` : initialDraft.invoiceId ? `invoice:${initialDraft.invoiceId}` : '')
     setLotTarget(initialDraft.lot || '')
     if (initialDraft.templateKey && checkTemplates[initialDraft.templateKey]) {
       setTemplateKey(initialDraft.templateKey)
@@ -261,7 +263,7 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
     const source = initialDraft.costId ? 'saved cost' : initialDraft.invoiceId ? 'invoice' : 'payment request'
     setMessage({ type: 'success', text: `Check details were filled from the ${source}. Enter the preprinted check number and review before saving.` })
     onInitialDraftApplied?.()
-  }, [costs, initialDraft, invoices, onInitialDraftApplied])
+  }, [checks, costs, initialDraft, invoices, onInitialDraftApplied])
 
   const sortedChecks = useMemo(() => [...checks].sort((a, b) => (
     String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id)
@@ -362,7 +364,7 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
         const activeChecks = checks.filter((check) => check.status !== 'voided' && check.checkType !== 'internal_transfer' && (
           String(check.costId || '') === String(cost.costId) || invoiceIds.has(String(check.invoiceId || ''))
         ))
-        const paid = activeChecks.reduce((sum, check) => sum + Number(check.amount || 0), 0)
+        const paid = paymentBalance(cost, costs, checks, invoices).paid
         return { cost, relatedInvoices, documents, activeChecks, paid, hasInvoice: documents.length > 0 }
       })
       .sort((left, right) => String(right.cost.date || '').localeCompare(String(left.cost.date || '')) || left.cost.name.localeCompare(right.cost.name))
@@ -412,6 +414,14 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
     && savedCheck.status !== 'voided'
     && checkTargetValue(savedCheck) === attachmentTarget
   )) : []
+  const balanceForTarget = (target, excludedCheckId = null) => {
+    const { costId, invoiceId } = parseAccountingTarget(target)
+    const record = costId ? costs.find((cost) => String(cost.costId) === String(costId))
+      : invoiceId ? invoices.find((invoice) => Number(invoice.id) === invoiceId) : null
+    return record ? paymentBalance(record, costs, checks, invoices, excludedCheckId) : null
+  }
+  const selectedBalance = balanceForTarget(attachmentTarget, editingCheckId)
+  const balanceAfterCheck = selectedBalance ? Math.round((selectedBalance.total - selectedBalance.paid - Number(amount || 0)) * 100) / 100 : null
   const previewData = viewingCheck || { checkNumber, payee, amount, date: checkDate, memo, accountLabel, templateKey, checkType, destinationAccount, status: 'draft', ...parseAccountingTarget(attachmentTarget) }
   const checkNumberWasChanged = Boolean(editingCheckId && originalCheckNumber && checkNumber.trim() !== originalCheckNumber.trim())
   const editingCheckWasVoided = sortedChecks.some((check) => check.id === editingCheckId && check.status === 'voided')
@@ -707,6 +717,8 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
 
   const changeAccountingTarget = (value) => {
     setAttachmentTarget(value)
+    const balance = balanceForTarget(value, editingCheckId)
+    if (balance && !editingCheckId && !amount.trim()) setAmount(String(balance.remaining))
     const { invoiceId, costId } = parseAccountingTarget(value)
     if (invoiceId) {
       const invoice = invoices.find((entry) => Number(entry.id) === invoiceId)
@@ -1093,6 +1105,13 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
               {costs.length ? <optgroup label="Costs and breakdowns">{accountingTargets.filter((target) => target.value.startsWith('cost:')).map((target) => <option key={target.value} value={target.value}>{target.label}</option>)}</optgroup> : null}
             </select>
           </label> : null}
+          {checkType !== 'internal_transfer' && selectedBalance ? <div className="cost-payment-balance wide-field" role="group" aria-label="Check payment balance">
+            <div><small>Invoice / cost total</small><strong>{currency.format(selectedBalance.total)}</strong></div>
+            <div><small>Already paid</small><strong>{currency.format(selectedBalance.paid)}</strong></div>
+            <div><small>Remaining before this check</small><strong>{currency.format(selectedBalance.remaining)}</strong></div>
+            <div><small>{balanceAfterCheck < 0 ? 'Overpayment after this check' : 'Remaining after this check'}</small><strong>{currency.format(Math.abs(balanceAfterCheck))}</strong></div>
+            <small>You can change the check amount. The invoice amount stays unchanged; the difference remains tracked here.</small>
+          </div> : null}
           {checkType !== 'internal_transfer' && activeTargetChecks.length ? <div className="duplicate-check-warning wide-field" role="alert">
             <div><strong>Possible duplicate payment</strong><span>{activeTargetChecks.map((savedCheck) => `Check #${savedCheck.checkNumber} (${currency.format(savedCheck.amount)}, ${savedCheck.status})`).join(' · ')} is already attached.</span></div>
             <label><input type="checkbox" checked={allowAdditionalCheck} onChange={(event) => setAllowAdditionalCheck(event.target.checked)} /> Allow another check for a partial or additional payment</label>
@@ -1255,6 +1274,7 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
           {filteredChecks.map((check) => <article key={check.id} className={`check-register-row ${check.status}${check.checkType === 'internal_transfer' ? ' internal-transfer' : ''}`}>
             <div><strong>#{check.checkNumber} · {check.payee}</strong><p>{check.date} · {check.accountLabel}{check.checkType === 'internal_transfer' ? ` → ${check.destinationAccount || 'Destination not recorded'}` : ''}{check.memo ? ` · ${check.memo}` : ''}</p>{check.checkType === 'internal_transfer' ? <span className="check-transfer-badge">Internal transfer · Not a cost</span> : null}</div>
             <strong>{currency.format(check.amount)}</strong>
+            {check.checkType !== 'internal_transfer' && balanceForTarget(checkTargetValue(check)) ? <small>Invoice / cost {currency.format(balanceForTarget(checkTargetValue(check)).total)} · Paid {currency.format(balanceForTarget(checkTargetValue(check)).paid)} · {balanceForTarget(checkTargetValue(check)).overpaid > 0 ? 'Overpaid' : 'Remaining'} {currency.format(balanceForTarget(checkTargetValue(check)).overpaid || balanceForTarget(checkTargetValue(check)).remaining)}</small> : null}
             <span className={`check-status ${check.status}`}>{check.status}</span>
             {check.checkType !== 'internal_transfer' ? <label className="check-register-attachment">Attached to
               <select aria-label={`Attachment for check ${check.checkNumber}`} value={checkTargetValue(check)} disabled={linkingCheckId === check.id} onChange={(event) => changeCheckLink(check, event.target.value)}>

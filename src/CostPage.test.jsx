@@ -1681,3 +1681,14 @@ describe('CostPage invoice extraction', () => {
     expect(badges).not.toHaveTextContent('Paid by Banu U')
   })
 })
+
+describe('combined cost check balances', () => {
+  it('creates a check for the unpaid balance after a paid breakdown', () => {
+    const parent = { id: 1, costId: 'sbs', version: 1, name: 'SBS materials', amount: 301295.51, ownerId: 1, phase: 'construction', date: '2026-09-30', attachments: [], lotAllocations: [] }
+    const child = { ...parent, id: 2, costId: 'paid-sbs', parentCostId: 'sbs', name: 'Prior SBS statement', amount: 18102.96 }
+    const onCreateCheck = vi.fn()
+    render(<CostPage owners={[{ id: 1, name: 'Green Fort' }]} developmentCosts={[parent]} breakdownCosts={[child]} costVersions={[parent, child]} projectChecks={[{ id: 152, checkNumber: '152', costId: child.costId, amount: 18102.96, status: 'printed' }]} onBack={() => {}} onCreateCheck={onCreateCheck} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Create check' }))
+    expect(onCreateCheck).toHaveBeenCalledWith(expect.objectContaining({ costId: 'sbs', amount: 283192.55 }))
+  })
+})

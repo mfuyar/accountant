@@ -923,3 +923,20 @@ describe('CheckPrinting', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('marked as spending for Lot 1')
   })
 })
+
+describe('check amounts and invoice balances', () => {
+  it('excludes check #152 from the grouped draft and keeps an edited check amount separate', async () => {
+    const parent = { costId: 'sbs', name: 'SBS materials', amount: 301295.51, phase: 'construction', attachments: [] }
+    const child = { costId: 'paid-sbs', parentCostId: 'sbs', name: 'Prior statement', amount: 18102.96, phase: 'construction', attachments: [] }
+    const paidCheck = { ...savedCheck, id: 152, checkNumber: '152', costId: child.costId, amount: 18102.96, status: 'printed' }
+    const onSaveCheck = vi.fn().mockResolvedValue({ ...savedCheck, id: 200 })
+    render(<CheckPrinting project={{ id: 7 }} costs={[parent, child]} checks={[paidCheck]} initialDraft={{ costId: parent.costId, payee: 'SBS', amount: parent.amount }} onSaveCheck={onSaveCheck} />)
+    expect(screen.getByLabelText('Check amount')).toHaveValue(283192.55)
+    fireEvent.change(screen.getByLabelText('Check amount'), { target: { value: '250000' } })
+    expect(screen.getByRole('group', { name: 'Check payment balance' })).toHaveTextContent('$33,192.55')
+    fireEvent.change(screen.getByLabelText('Check number'), { target: { value: '200' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save check to register' }))
+    await waitFor(() => expect(onSaveCheck).toHaveBeenCalledWith(expect.objectContaining({ amount: 250000, costId: 'sbs' })))
+    expect(parent.amount).toBe(301295.51)
+  })
+})
