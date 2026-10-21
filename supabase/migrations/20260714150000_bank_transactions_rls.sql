@@ -38,3 +38,11 @@ create policy bank_transactions_project_admin_access on public.bank_transactions
 grant select, insert, update, delete on public.bank_transactions to authenticated;
 grant usage, select on sequence public.bank_transactions_id_seq to authenticated;
 revoke all on public.bank_transactions from anon;
+
+-- Explicit Data API privileges: new tables no longer inherit API access.
+grant select, insert, update, delete on
+  public.bank_transactions
+to service_role;
+grant usage, select on sequence
+  public.bank_transactions_id_seq
+to authenticated, service_role;

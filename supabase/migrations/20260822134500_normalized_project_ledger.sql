@@ -197,3 +197,21 @@ $$;
 
 grant execute on function public.create_cost_version_v8(bigint, uuid, uuid, bigint, text, numeric, text, text, jsonb, date, jsonb, boolean, text, uuid, text, numeric, numeric, date, numeric, text, text, text, text, bigint, text, text, text, boolean, boolean, text, text, boolean) to authenticated;
 revoke all on function public.create_cost_version_v8(bigint, uuid, uuid, bigint, text, numeric, text, text, jsonb, date, jsonb, boolean, text, uuid, text, numeric, numeric, date, numeric, text, text, text, text, bigint, text, text, text, boolean, boolean, text, text, boolean) from public, anon;
+
+-- Explicit Data API privileges: new tables no longer inherit API access.
+grant select, insert, update, delete on
+  public.properties,
+  public.cost_subcategories,
+  public.funding_sources,
+  public.loans,
+  public.transaction_allocations,
+  public.ledger_audit_logs
+to service_role;
+grant usage, select on sequence
+  public.properties_id_seq,
+  public.cost_subcategories_id_seq,
+  public.funding_sources_id_seq,
+  public.loans_id_seq,
+  public.transaction_allocations_id_seq,
+  public.ledger_audit_logs_id_seq
+to authenticated, service_role;

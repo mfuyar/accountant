@@ -33,6 +33,18 @@ The functions also validate the user and project membership themselves.
 Redeploy an Edge Function after changing its source; publishing the web app alone
 does not update server-side function code.
 
+Table-creation SQL includes explicit Data API grants for Supabase's October 30,
+2026 default-privilege change. Existing installations should apply
+`supabase/migrations/20261021140000_explicit_data_api_privileges.sql` to make backend
+access explicit; it preserves browser permissions and row-level security policies.
+When adding a table, include the required grants, RLS, and policies in that same
+migration. Grant browser access only to `authenticated` where needed, and backend
+access to `service_role`; `bank_connections` must remain backend-only. Include
+explicit grants for any ID sequences and API views. Do not restore blanket default
+grants or grant anonymous access to accounting data. After setup and migrations,
+run `supabase/tests/data_api_privileges_check.sql` in a test database to check
+backend access, RLS, and the bank-secret and immutable-cost restrictions.
+
 ```sh
 npm install
 npm run dev

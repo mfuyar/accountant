@@ -31,3 +31,8 @@ create policy construction_cost_drafts_project_admin_access on public.constructi
 
 grant select, insert, update, delete on public.construction_cost_drafts to authenticated;
 revoke all on public.construction_cost_drafts from anon;
+
+-- Explicit Data API privileges: new tables no longer inherit API access.
+grant select, insert, update, delete on
+  public.construction_cost_drafts
+to service_role;

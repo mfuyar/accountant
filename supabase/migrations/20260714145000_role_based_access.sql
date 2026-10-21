@@ -334,3 +334,14 @@ grant select, insert, delete on public.admin_allowlist to authenticated;
 grant usage, select on all sequences in schema public to authenticated;
 
 revoke all on public.admin_allowlist, public.profiles, public.project_members, public.project_invitations from anon;
+
+-- Explicit Data API privileges: new tables no longer inherit API access.
+grant select, insert, update, delete on
+  public.admin_allowlist,
+  public.profiles,
+  public.project_members,
+  public.project_invitations
+to service_role;
+grant usage, select on sequence
+  public.project_invitations_id_seq
+to authenticated, service_role;

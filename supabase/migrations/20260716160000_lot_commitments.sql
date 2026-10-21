@@ -21,3 +21,11 @@ create policy project_lot_commitments_project_admin_access on public.project_lot
 
 grant select, insert, update on public.project_lot_commitments to authenticated;
 revoke all on public.project_lot_commitments from anon;
+
+-- Explicit Data API privileges: new tables no longer inherit API access.
+grant select, insert, update, delete on
+  public.project_lot_commitments
+to service_role;
+grant usage, select on sequence
+  public.project_lot_commitments_id_seq
+to authenticated, service_role;

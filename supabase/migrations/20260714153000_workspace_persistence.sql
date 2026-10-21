@@ -288,3 +288,17 @@ grant usage, select on all sequences in schema public to authenticated;
 revoke all on public.cost_versions, public.incomes, public.review_items, public.documents from anon;
 revoke all on function public.create_cost_version(bigint, uuid, bigint, text, numeric, text, date, jsonb, boolean) from public, anon;
 revoke all on function public.approve_review_item(bigint, bigint) from public, anon;
+
+-- Explicit Data API privileges: new tables no longer inherit API access.
+grant select, insert, update, delete on
+  public.cost_versions,
+  public.incomes,
+  public.review_items,
+  public.documents
+to service_role;
+grant usage, select on sequence
+  public.cost_versions_id_seq,
+  public.incomes_id_seq,
+  public.review_items_id_seq
+to authenticated, service_role;
+grant select on public.active_costs to service_role;

@@ -29,3 +29,11 @@ create policy project_checks_project_admin_access on public.project_checks
 
 grant select, insert, update on public.project_checks to authenticated;
 revoke all on public.project_checks from anon;
+
+-- Explicit Data API privileges: new tables no longer inherit API access.
+grant select, insert, update, delete on
+  public.project_checks
+to service_role;
+grant usage, select on sequence
+  public.project_checks_id_seq
+to authenticated, service_role;

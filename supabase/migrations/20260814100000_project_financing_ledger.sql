@@ -32,3 +32,11 @@ create policy project_financing_transactions_project_admin_access on public.proj
 grant select, insert, update, delete on public.project_financing_transactions to authenticated;
 grant usage, select on sequence public.project_financing_transactions_id_seq to authenticated;
 revoke all on public.project_financing_transactions from anon;
+
+-- Explicit Data API privileges: new tables no longer inherit API access.
+grant select, insert, update, delete on
+  public.project_financing_transactions
+to service_role;
+grant usage, select on sequence
+  public.project_financing_transactions_id_seq
+to authenticated, service_role;

@@ -25,3 +25,7 @@ alter table public.bank_connections enable row level security;
 -- The plaid-bank Edge Function is the only application path that uses this table.
 revoke all on public.bank_connections from anon, authenticated;
 
+-- Explicit Data API privileges: new tables no longer inherit API access.
+grant select, insert, update, delete on
+  public.bank_connections
+to service_role;

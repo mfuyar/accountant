@@ -378,3 +378,41 @@ create policy project_financing_transactions_project_admin_access on public.proj
 grant select, insert, update, delete on public.project_financing_transactions to authenticated;
 grant usage, select on sequence public.project_financing_transactions_id_seq to authenticated;
 revoke all on public.project_financing_transactions from anon;
+
+-- Explicit Data API privileges: new tables no longer inherit API access.
+grant select on public.companies, public.profiles to authenticated;
+grant select, insert, update, delete on public.projects, public.owners,
+  public.cost_categories, public.vendors, public.invoices, public.transactions,
+  public.payments, public.review_items, public.documents to authenticated;
+-- Cost history is append-only for browser clients.
+grant select, insert on public.cost_versions to authenticated;
+revoke update, delete on public.cost_versions from authenticated;
+revoke all on public.companies, public.profiles, public.projects, public.owners, public.cost_categories, public.vendors, public.invoices, public.transactions, public.payments, public.cost_versions, public.review_items, public.documents, public.project_financing_transactions from anon;
+grant select, insert, update, delete on
+  public.companies,
+  public.profiles,
+  public.projects,
+  public.owners,
+  public.cost_categories,
+  public.vendors,
+  public.invoices,
+  public.transactions,
+  public.payments,
+  public.cost_versions,
+  public.review_items,
+  public.documents,
+  public.project_financing_transactions
+to service_role;
+grant usage, select on sequence
+  public.projects_id_seq,
+  public.owners_id_seq,
+  public.cost_categories_id_seq,
+  public.vendors_id_seq,
+  public.invoices_id_seq,
+  public.transactions_id_seq,
+  public.payments_id_seq,
+  public.cost_versions_id_seq,
+  public.review_items_id_seq,
+  public.project_financing_transactions_id_seq
+to authenticated, service_role;
+grant select on public.active_costs to service_role;
