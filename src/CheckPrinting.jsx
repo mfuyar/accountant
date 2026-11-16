@@ -189,6 +189,8 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
   const [message, setMessage] = useState(null)
   const [saving, setSaving] = useState(false)
   const [printingCheck, setPrintingCheck] = useState(null)
+  const [pendingPrintConfirmation, setPendingPrintConfirmation] = useState(null)
+  const [confirmingPrint, setConfirmingPrint] = useState(false)
   const [printingTemplateSheet, setPrintingTemplateSheet] = useState(false)
   const [printingCarrierGuide, setPrintingCarrierGuide] = useState(false)
   const [printingEnvelope, setPrintingEnvelope] = useState(null)
@@ -424,6 +426,7 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
   const balanceAfterCheck = selectedBalance ? Math.round((selectedBalance.total - selectedBalance.paid - Number(amount || 0)) * 100) / 100 : null
   const previewData = viewingCheck || { checkNumber, payee, amount, date: checkDate, memo, accountLabel, templateKey, checkType, destinationAccount, status: 'draft', ...parseAccountingTarget(attachmentTarget) }
   const checkNumberWasChanged = Boolean(editingCheckId && originalCheckNumber && checkNumber.trim() !== originalCheckNumber.trim())
+  const matchingSavedCheck = sortedChecks.find((check) => check.id !== editingCheckId && String(check.checkNumber).trim().toLowerCase() === checkNumber.trim().toLowerCase())
   const editingCheckWasVoided = sortedChecks.some((check) => check.id === editingCheckId && check.status === 'voided')
   const previewTarget = accountingTargets.find((target) => target.value === checkTargetValue(previewData))
   const previewTemplate = checkTemplates[previewData.templateKey] || checkTemplates.bofa
@@ -453,8 +456,8 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
     const numericAmount = Number(amount)
     const normalizedCheckNumber = checkNumber.trim()
     if (!normalizedCheckNumber) return setMessage({ type: 'error', text: 'Enter the number printed on the check.' })
-    if (sortedChecks.some((check) => check.id !== editingCheckId && String(check.checkNumber).trim().toLowerCase() === normalizedCheckNumber.toLowerCase())) {
-      return setMessage({ type: 'error', text: `Check #${normalizedCheckNumber} is already saved for ${project.name}. Open it in the check register to view or reprint it, or enter a different preprinted check number.` })
+    if (matchingSavedCheck) {
+      return setMessage({ type: 'error', text: `Check #${normalizedCheckNumber} is already saved for ${project.name}. Status: ${matchingSavedCheck.status}. Open the saved check below to continue.` })
     }
     if (!payee.trim()) return setMessage({ type: 'error', text: 'Enter the person or company being paid.' })
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) return setMessage({ type: 'error', text: 'Enter a check amount greater than $0.00.' })
@@ -496,7 +499,7 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
       setMessage({
         type: 'error',
         text: isDuplicateCheckError(error)
-          ? `Check #${normalizedCheckNumber} is already saved for ${project.name}. Open it in the check register to view or reprint it, or enter a different preprinted check number.`
+          ? `Check #${normalizedCheckNumber} is already saved for ${project.name}. Open the saved check in the register, or refresh to load it.`
           : `The check could not be saved: ${errorMessage(error)}`,
       })
     } finally {
@@ -520,12 +523,27 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
       setPrintingTemplateSheet(false)
       setPrintingCarrierGuide(false)
       setPrintingEnvelope(null)
-      const printable = check.status === 'printed' ? check : await onUpdateStatus(check.id, 'printed')
-      setPrintingCheck(printable)
-      if (viewingCheck?.id === check.id) setViewingCheck(printable)
+      setPrintingCheck(check)
+      setPendingPrintConfirmation(check.status === 'printed' ? null : check)
       window.setTimeout(() => window.print(), 0)
     } catch (error) {
       setMessage({ type: 'error', text: `The check could not be prepared for printing: ${errorMessage(error)}` })
+    }
+  }
+
+  const confirmCheckPrinted = async () => {
+    if (!pendingPrintConfirmation || confirmingPrint) return
+    setConfirmingPrint(true)
+    try {
+      const saved = await onUpdateStatus(pendingPrintConfirmation.id, 'printed')
+      if (viewingCheck?.id === saved.id) setViewingCheck(saved)
+      setPrintingCheck(saved)
+      setPendingPrintConfirmation(null)
+      setMessage({ type: 'success', text: `Check #${saved.checkNumber} confirmed printed.` })
+    } catch (error) {
+      setMessage({ type: 'error', text: `Print confirmation could not be saved: ${errorMessage(error)}` })
+    } finally {
+      setConfirmingPrint(false)
     }
   }
 
@@ -1134,6 +1152,10 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
           </label> : null}
           {amount && Number(amount) > 0 ? <div className="check-words-preview wide-field"><span>Amount in words</span><strong>{amountToCheckWords(amount)}</strong></div> : null}
           {message ? <p className={message.type === 'error' ? 'validation-error wide-field' : 'wide-field'} role={message.type === 'error' ? 'alert' : 'status'}>{message.text}</p> : null}
+          {matchingSavedCheck ? <div className="wide-field">
+            <p>Check #{matchingSavedCheck.checkNumber} · {matchingSavedCheck.payee} · {currency.format(matchingSavedCheck.amount)} · {matchingSavedCheck.status === 'draft' ? 'Draft — not printed' : matchingSavedCheck.status}</p>
+            <button type="button" className="secondary-button" onClick={() => { setMessage(null); viewSavedCheck(matchingSavedCheck) }}>Open saved check #{matchingSavedCheck.checkNumber}</button>
+          </div> : null}
           <div className="button-row wide-field">
             <button type="submit" className="action-button" disabled={saving}>{saving ? 'Saving…' : (editingCheckId ? 'Update saved check' : 'Save check to register')}</button>
             {checkType !== 'internal_transfer' ? <button type="button" className="secondary-button" disabled={preparingEnvelope} onClick={() => printEnvelope()}>{preparingEnvelope ? 'Reading invoice address…' : 'Print 9 × 4 envelope'}</button> : null}
@@ -1147,6 +1169,14 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
           <div><p className="eyebrow">{viewingCheck ? 'Saved check' : 'Live preview'}</p><h2>{viewingCheck ? `Check #${viewingCheck.checkNumber}` : `${previewTemplate.label} · 6 × 2.7`}</h2></div>
           {viewingCheck ? <button type="button" className="secondary-button" onClick={() => setViewingCheck(null)}>Back to current draft</button> : null}
         </div>
+        {pendingPrintConfirmation ? <div className="voided-reprint-warning" role="status">
+          <strong>Did check #{pendingPrintConfirmation.checkNumber} print successfully?</strong>
+          <span>Its status stays {pendingPrintConfirmation.status} until you confirm the paper check printed.</span>
+          <div className="button-row">
+            <button type="button" className="action-button" disabled={confirmingPrint} onClick={confirmCheckPrinted}>{confirmingPrint ? 'Saving…' : 'Confirm check printed'}</button>
+            <button type="button" className="secondary-button" disabled={confirmingPrint} onClick={() => { setPendingPrintConfirmation(null); setPrintingCheck(null) }}>Did not print / Cancelled</button>
+          </div>
+        </div> : null}
         <p className="hero-copy">{viewingCheck ? `Saved ${viewingCheck.date} · ${viewingCheck.status}${viewingCheck.checkType === 'internal_transfer' ? ' · Internal transfer, not a cost' : (previewTarget ? ` · ${previewTarget.label}` : ' · Not attached')}` : 'The preview updates while you type. Shaded text represents information already printed on the check stock.'}</p>
         {viewingCheck ? <label className="saved-check-template-control">Template for this saved check
           <select aria-label={`Template for saved check ${viewingCheck.checkNumber}`} value={viewingCheck.templateKey || 'bofa'} disabled={updatingTemplate} onChange={(event) => changeSavedTemplate(event.target.value)}>
@@ -1155,13 +1185,14 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
           </select>
         </label> : null}
         {viewingCheck ? <div className="button-row saved-check-actions">
+          {viewingCheck.status !== 'voided' ? <button type="button" className="action-button" onClick={() => printCheck(viewingCheck)}>{viewingCheck.status === 'printed' ? 'Reprint saved check' : 'Print saved check'}</button> : null}
           <button type="button" className="secondary-button" onClick={() => editSavedCheck(viewingCheck)}>Edit saved check</button>
           {viewingCheck.checkType !== 'internal_transfer' ? <button type="button" className="secondary-button" onClick={() => printEnvelope(viewingCheck)}>Print 9 × 4 envelope</button> : null}
           {viewingCheck.status === 'voided' && pendingVoidedReprintId !== viewingCheck.id ? <button type="button" className="secondary-button" onClick={() => setPendingVoidedReprintId(viewingCheck.id)}>Reprint voided check</button> : null}
         </div> : null}
         {viewingCheck?.status === 'voided' && pendingVoidedReprintId === viewingCheck.id ? <div className="voided-reprint-warning">
           <strong>Reprint voided check #{viewingCheck.checkNumber}?</strong>
-          <span>This will reactivate it and change its register status from Voided to Printed.</span>
+          <span>It stays voided until you confirm the paper check printed successfully.</span>
           <div className="button-row"><button type="button" className="danger-button" onClick={() => confirmVoidedReprint(viewingCheck)}>Confirm reprint</button><button type="button" className="secondary-button" onClick={() => setPendingVoidedReprintId(null)}>Cancel</button></div>
         </div> : null}
         <div className={`live-check-preview ${previewData.templateKey || 'bofa'}`} aria-label={viewingCheck ? `Saved check preview ${viewingCheck.checkNumber}` : 'Live check preview'}>
@@ -1311,7 +1342,7 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
             </div> : null}
             {check.status === 'voided' && viewingCheck?.id !== check.id && pendingVoidedReprintId === check.id ? <div className="voided-reprint-warning">
               <strong>Reprint voided check #{check.checkNumber}?</strong>
-              <span>This will reactivate it and change its register status from Voided to Printed.</span>
+              <span>It stays voided until you confirm the paper check printed successfully.</span>
               <div className="button-row"><button type="button" className="danger-button" onClick={() => confirmVoidedReprint(check)}>Confirm reprint</button><button type="button" className="secondary-button" onClick={() => setPendingVoidedReprintId(null)}>Cancel</button></div>
             </div> : null}
           </article>)}

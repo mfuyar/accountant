@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { currency } from './lib/currency'
+import { financingCashDirection, isLoanReceivable, summarizeLoanReceivables } from './lib/loanReceivables'
 
 const BUILDER_NAME = 'Habitech Builders and Realty, Inc'
 
@@ -7,6 +8,9 @@ const today = () => new Date().toLocaleDateString('en-CA')
 
 const typeLabels = {
   loan_received: 'Private loan received',
+  loan_given: 'Loan given / receivable',
+  loan_principal_received: 'Borrower principal repayment received',
+  loan_interest_received: 'Loan interest received',
   principal_repayment: 'Loan principal repayment',
   interest_payment: 'Loan interest payment',
   owner_distribution: 'Partner profit payout',
@@ -22,8 +26,8 @@ const paymentMethodLabel = (method) => ({
   other: 'Other',
 }[method] || 'Not specified')
 
-const cashDirection = (type) => type === 'loan_received' ? 1 : -1
-const isPayment = (type) => type !== 'loan_received'
+const cashDirection = financingCashDirection
+const isPayment = (type) => cashDirection(type) < 0
 
 function FinancingLedger({ project, owners = [], entries = [], onSave, onDelete, onStatusChange, onUpdate, onTreatmentChange, onPrepareCheck }) {
   const [type, setType] = useState('loan_received')
@@ -53,6 +57,7 @@ function FinancingLedger({ project, owners = [], entries = [], onSave, onDelete,
 
   const completed = entries.filter((entry) => entry.status === 'completed')
   const planned = entries.filter((entry) => entry.status === 'planned')
+  const borrowerBalances = useMemo(() => summarizeLoanReceivables(entries), [entries])
   const summary = useMemo(() => {
     const loanReceived = completed.filter((entry) => entry.type === 'loan_received').reduce((sum, entry) => sum + entry.amount, 0)
     const principalRepaid = completed.filter((entry) => entry.type === 'principal_repayment').reduce((sum, entry) => sum + entry.amount, 0)
@@ -69,7 +74,8 @@ function FinancingLedger({ project, owners = [], entries = [], onSave, onDelete,
       ownerDistributions,
       projectRepaymentCosts,
       plannedOutgoing,
-      netFinancingCash: loanReceived - principalRepaid - interestPaid - ownerDistributionCash,
+      netFinancingCash: loanReceived - principalRepaid - interestPaid - ownerDistributionCash
+        + completed.filter((entry) => isLoanReceivable(entry.type)).reduce((sum, entry) => sum + cashDirection(entry.type) * entry.amount, 0),
     }
   }, [completed, planned])
 
@@ -243,7 +249,7 @@ function FinancingLedger({ project, owners = [], entries = [], onSave, onDelete,
 
   return <section className="financing-ledger">
     <div className="panel financing-summary-panel">
-      <div className="panel-header"><div><p className="eyebrow">Accounting & budgeting</p><h2>Private loans and owner payouts</h2><p>Keep financing and equity activity separate from project income and deductible costs.</p></div></div>
+      <div className="panel-header"><div><p className="eyebrow">Accounting & budgeting</p><h2>Loans, receivables and owner payouts</h2><p>Keep financing and equity activity separate from project income and deductible costs.</p></div></div>
       <div className="financing-summary-grid">
         <div><span>Private-loan balance</span><strong>{currency.format(summary.outstanding)}</strong><small>Received minus principal repaid</small></div>
         <div><span>Planned payouts</span><strong>{currency.format(summary.plannedOutgoing)}</strong><small>Upcoming repayments, interest and distributions</small></div>
@@ -262,12 +268,13 @@ function FinancingLedger({ project, owners = [], entries = [], onSave, onDelete,
       <div className="panel" ref={formRef}>
         <div className="panel-header"><div><p className="eyebrow">Add or plan</p><h2>Financing entry</h2></div></div>
         <form className="owner-form financing-entry-form" onSubmit={submit} noValidate>
-          <label>Entry type<select aria-label="Financing entry type" value={type} onChange={(event) => { setType(event.target.value); setAllowDuplicate(false) }}>
+          <label>Entry type<select aria-label="Financing entry type" value={type} onChange={(event) => { setType(event.target.value); if (event.target.value === 'loan_given') setStatus('planned'); setAllowDuplicate(false) }}>
             {Object.entries(typeLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
           </select></label>
           <label>Status<select aria-label="Financing entry status" value={status} onChange={(event) => { setStatus(event.target.value); setAllowDuplicate(false) }}><option value="planned">Planned / budgeted</option><option value="completed">Completed</option></select></label>
           {type === 'owner_distribution' ? <label>Owner<select aria-label="Payout owner" value={ownerId} onChange={(event) => setOwnerId(event.target.value)}><option value="">Select owner</option><option value="habitech_builder">Builder — {BUILDER_NAME}</option>{owners.map((owner) => <option key={owner.id} value={owner.id}>{owner.name}</option>)}</select></label>
-            : <label>{type === 'loan_received' ? 'Private lender' : 'Pay to lender'}<input aria-label="Financing counterparty" value={counterparty} onChange={(event) => setCounterparty(event.target.value)} placeholder="Person or company name" /></label>}
+            : <label>{isLoanReceivable(type) ? 'Borrower' : type === 'loan_received' ? 'Private lender' : 'Pay to lender'}<input aria-label="Financing counterparty" value={counterparty} onChange={(event) => setCounterparty(event.target.value)} placeholder="Person or company name" /></label>}
+          {isLoanReceivable(type) ? <p className="wide-field">Loan principal is a company receivable. Planned loans do not change cash or the funded loan balance. Record principal repayments and interest separately. Mark the loan completed once the funds are issued.</p> : null}
           <label>Amount<span className="currency-input"><span aria-hidden="true">$</span><input aria-label="Financing amount" type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></span></label>
           <label>{status === 'planned' ? 'Planned date' : 'Completed date'}<input aria-label="Financing date" type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
           <label>Payment method<select aria-label="Financing payment method" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option value="">Not specified</option><option value="check">Check</option><option value="bank_transfer">ACH / bank transfer</option><option value="bofa_zelle">Zelle from BOFA</option><option value="amex_business">Amex Business usage</option><option value="other_credit_card">Other credit card usage</option><option value="cash">Cash</option><option value="other">Other</option></select></label>
@@ -286,6 +293,17 @@ function FinancingLedger({ project, owners = [], entries = [], onSave, onDelete,
           {!lenderBalances.length ? <div className="cost-empty-state"><strong>No private loans recorded.</strong><p>Add a completed loan received entry to establish a lender balance.</p></div> : null}
         </div>
         {owners.length ? <div className="owner-payout-shortcuts"><strong>Owner payout shortcuts</strong><div className="button-row">{owners.map((owner) => <button type="button" className="secondary-button" key={owner.id} onClick={() => startPayment('owner_distribution', owner.name, owner.id)}>Pay {owner.name}</button>)}</div></div> : null}
+      </div>
+    </div>
+
+    <div className="panel">
+      <div className="panel-header"><div><p className="eyebrow">Company assets</p><h2>Loans given / Receivables</h2><p>Borrower balances exclude planned checks and interest. These amounts stay outside construction costs and partner payouts.</p></div></div>
+      <div className="table-card">
+        {borrowerBalances.map((borrower) => <div className="table-row" key={borrower.name.toLowerCase()}>
+          <div><strong>{borrower.name}</strong><p>Advanced {currency.format(borrower.advanced)} · Principal returned {currency.format(borrower.repaid)} · Interest received {currency.format(borrower.interest)}</p><small>Planned loan: {currency.format(borrower.planned)}</small></div>
+          <div className="metric-stack"><span>Loan receivable</span><strong>{currency.format(borrower.balance)}</strong>{borrower.balance > 0 ? <button type="button" className="secondary-button" onClick={() => startPayment('loan_principal_received', borrower.name)}>Record borrower repayment</button> : null}</div>
+        </div>)}
+        {!borrowerBalances.length ? <p>No loans given recorded yet.</p> : null}
       </div>
     </div>
 
@@ -310,7 +328,7 @@ function FinancingLedger({ project, owners = [], entries = [], onSave, onDelete,
           const profitOwnerId = suggestedProfitOwnerId(entry)
           return <article className="financing-history-row" key={entry.id}>
             <div className="financing-payment-details"><strong>{typeLabels[entry.type]}</strong><p>{entry.counterparty} · {entry.date}{entry.reference ? ` · Ref ${entry.reference}` : ''} · {paymentMethodLabel(entry.paymentMethod)}</p>{entry.notes ? <small>{entry.notes}</small> : null}
-              {onTreatmentChange ? <div className="financing-treatment-controls">
+              {isLoanReceivable(entry.type) ? <small>Loan receivable / interest received — excluded from project costs and partner profit.</small> : onTreatmentChange ? <div className="financing-treatment-controls">
                 <label><input type="checkbox" checked={entry.accountingTreatment === 'project_cost'} disabled={treatmentSavingId === entry.id} onChange={(event) => changeTreatment(entry, event.target.checked ? 'project_cost' : '')} /> Project cost</label>
                 <label><input type="checkbox" checked={entry.accountingTreatment === 'partner_profit'} disabled={treatmentSavingId === entry.id} onChange={(event) => changeTreatment(entry, event.target.checked ? 'partner_profit' : '', event.target.checked ? profitOwnerId : null)} /> Deduct from partner profit</label>
                 {entry.accountingTreatment === 'partner_profit' ? <label>Partner<select aria-label={`Profit partner for ${entry.counterparty}`} value={entry.profitOwnerId || profitOwnerId || ''} disabled={treatmentSavingId === entry.id} onChange={(event) => changeTreatment(entry, 'partner_profit', event.target.value ? Number(event.target.value) : null)}><option value="">Use payee: {entry.counterparty}</option>{owners.map((owner) => <option key={owner.id} value={owner.id}>{owner.name}</option>)}</select></label> : null}

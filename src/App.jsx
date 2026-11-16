@@ -6,6 +6,7 @@ import ClassificationPage from './ClassificationPage'
 import IncomeSection from './IncomeSection'
 import LotCommitments from './LotCommitments'
 import SpendingByJob from './SpendingByJob'
+import ConstructionLedger from './ConstructionLedger'
 import AttachmentPreviewModal from './AttachmentPreviewModal'
 import TaxAudit from './TaxAudit'
 import BankDashboard from './BankDashboard'
@@ -188,6 +189,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
   const [activeProjectId, setActiveProjectId] = useState(initialProjects[0]?.id ?? null)
   const [showIntakePage, setShowIntakePage] = useState(false)
   const [showCostPage, setShowCostPage] = useState(false)
+  const [initialCostPhase, setInitialCostPhase] = useState('development')
   const [breakdownParentCostId, setBreakdownParentCostId] = useState(null)
   const [costPageEditCostId, setCostPageEditCostId] = useState(null)
   const [showClassificationPage, setShowClassificationPage] = useState(false)
@@ -1568,8 +1570,10 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
           projectName={activeProject?.name || 'Project'}
           initialParentCostId={breakdownParentCostId}
           initialEditCostId={costPageEditCostId}
+          initialPhase={initialCostPhase}
           onBack={() => {
             setShowCostPage(false)
+            setInitialCostPhase('development')
             setBreakdownParentCostId(null)
             setCostPageEditCostId(null)
           }}
@@ -1764,9 +1768,10 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
             ['reports', 'Reports'],
             ['lots', 'Lots'],
             ['jobs', 'Spending by Job'],
+            ['construction-ledger', 'Construction Ledger'],
             ['income', 'Draws & Income'],
             ['partners', 'Partners'],
-            ['financing', 'Loans & Owner Payouts'],
+            ['financing', 'Loans, Receivables & Payouts'],
             ['bank', 'Bank'],
             ['checks', 'Checks'],
             ['documents', 'Documents'],
@@ -2355,6 +2360,18 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
         sharedDevelopmentCostTotal={ownerCostTotal}
       /> : null}
 
+      {showProjectSection('construction-ledger') ? <ConstructionLedger
+        key={activeProjectId}
+        project={activeProject}
+        costs={accountingCostRecords}
+        checks={projectChecks.filter((check) => String(check.projectId) === String(activeProjectId))}
+        invoices={invoices.filter((invoice) => String(invoice.projectId) === String(activeProjectId))}
+        owners={owners}
+        onEditCost={handleOpenCostEdit}
+        onAddBreakdown={handleOpenCostBreakdown}
+        onManageCosts={() => { setInitialCostPhase('construction'); setBreakdownParentCostId(null); setCostPageEditCostId(null); setShowCostPage(true) }}
+      /> : null}
+
       {showProjectSection('jobs') ? <SpendingByJob
         constructionDrafts={constructionDrafts}
         checks={projectChecks.filter((check) => String(check.projectId) === String(activeProjectId))}
@@ -2380,6 +2397,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
 
       {showProjectSection('income') ? <IncomeSection
         incomes={projectIncomes}
+        costs={accountingCostRecords}
         checks={projectChecks.filter((check) => String(check.projectId) === String(activeProjectId))}
         projects={activeProject ? [activeProject] : []}
         lotCommitments={projectLotCommitments}

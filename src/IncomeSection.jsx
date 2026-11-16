@@ -3,12 +3,14 @@ import { extractLoanDrawFromDocument, extractTransactionFromImage } from './lib/
 import { summarizePreSaleDepositActivities } from './lib/developmentFunding'
 import { providenceLoanAccountLabel } from './lib/providenceLoanAccounts'
 import { currency } from './lib/currency'
+import { summarizeConstructionInterest } from './lib/constructionInterest'
 
 const lotKeys = ['Lot 2', 'Lot 3', 'Lot 4']
 const emptyLotAmounts = { 'Lot 2': '', 'Lot 3': '', 'Lot 4': '' }
 const emptyLotDetails = { 'Lot 2': {}, 'Lot 3': {}, 'Lot 4': {} }
 const emptyChecks = []
 const emptyCommitments = []
+const emptyCosts = []
 const depositActivityLabels = {
   receipt: 'Deposit installment received',
   application: 'Applied to project',
@@ -29,7 +31,7 @@ const validateIncomeDocument = (file) => {
 const lotAmountsTotal = (lotAmounts) => lotKeys.reduce((sum, lot) => sum + (Number(lotAmounts[lot]) || 0), 0)
 const incomeTypeLabel = (income) => income.type === 'pre_sale_deposit' ? 'pre-sale deposit · applied to development' : income.type.replaceAll('_', ' ')
 
-function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments = emptyCommitments, onAddIncome, onEditIncome, onDeleteIncome, onUploadDocument, onOpenDocument }) {
+function IncomeSection({ incomes, checks = emptyChecks, costs = emptyCosts, projects, lotCommitments = emptyCommitments, onAddIncome, onEditIncome, onDeleteIncome, onUploadDocument, onOpenDocument }) {
   const [description, setDescription] = useState('')
   const [source, setSource] = useState('')
   const [amount, setAmount] = useState('')
@@ -86,6 +88,11 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments
   const totalIncome = useMemo(() => {
     return incomes.reduce((sum, income) => sum + Number(income.amount || 0), 0)
   }, [incomes])
+
+  const paidInterest = useMemo(() => summarizeConstructionInterest(
+    costs.filter((cost) => projects.some((project) => String(project.id) === String(cost.projectId))),
+    checks,
+  ), [costs, checks, projects])
 
   const drawPlan = useMemo(() => {
     const draws = incomes.filter((income) => income.type === 'loan_draw')
@@ -647,10 +654,11 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments
           <div><span>Construction funds</span><strong>{drawPlan.available ? currency.format(drawPlan.available) : 'Add lot commitments'}</strong></div>
           <div><span>Advanced to date</span><strong>{currency.format(drawPlan.advanced)}</strong></div>
           <div><span>Remaining to draw</span><strong>{drawPlan.available ? currency.format(Math.max(0, drawPlan.available - drawPlan.advanced)) : '—'}</strong></div>
+          <div><span>Paid interest</span><strong>{currency.format(paidInterest.paid)}</strong></div>
         </div>
         <div className="draw-plan-table-wrap">
           <table className="draw-plan-table">
-            <thead><tr><th>Lot / property</th><th>Construction funds</th><th>Latest completion</th><th>Advanced</th><th>Remaining</th></tr></thead>
+            <thead><tr><th>Lot / property</th><th>Construction funds</th><th>Latest completion</th><th>Advanced</th><th>Remaining</th><th>Paid interest</th></tr></thead>
             <tbody>{drawPlan.lots.map((lot) => (
               <tr key={lot.lot}>
                 <td><strong>{lot.lot}</strong><span>{providenceLoanAccountLabel(lot.lot)}</span><span>{lot.address || 'Address not configured'}</span></td>
@@ -658,10 +666,27 @@ function IncomeSection({ incomes, checks = emptyChecks, projects, lotCommitments
                 <td>{lot.completed ? `${lot.completed}%` : '—'}</td>
                 <td>{currency.format(lot.advanced)}</td>
                 <td>{lot.available ? currency.format(Math.max(0, lot.available - lot.advanced)) : '—'}</td>
+                <td>{currency.format(paidInterest.byLot[lot.lot] || 0)}</td>
               </tr>
             ))}</tbody>
           </table>
         </div>
+        <p>Paid interest is included in construction costs. Draw totals show loan funding separately.</p>
+        {paidInterest.unassigned > 0 ? <p>Interest awaiting lot allocation: {currency.format(paidInterest.unassigned)}</p> : null}
+        {paidInterest.payments.length ? <details>
+          <summary>View interest payments ({paidInterest.payments.length})</summary>
+          <div className="draw-plan-table-wrap">
+            <table className="draw-plan-table" aria-label="Paid construction interest">
+              <thead><tr><th>Paid date</th><th>Loan / payment</th><th>Building / lot</th><th>Interest paid</th></tr></thead>
+              <tbody>{paidInterest.payments.map((payment) => <tr key={payment.costId}>
+                <td>{payment.paymentDate || payment.date || 'Date not recorded'}</td>
+                <td>{payment.name}{payment.referenceNumber ? <span>Ref: {payment.referenceNumber}</span> : null}</td>
+                <td>{(payment.lotAllocations || []).map((entry) => entry.lot).join(', ') || 'Unassigned'}</td>
+                <td>{currency.format(payment.paid)}</td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+        </details> : null}
       </section>
 
       <div className="section-grid income-section-grid">

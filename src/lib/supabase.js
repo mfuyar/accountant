@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { isLoanReceivable } from './loanReceivables'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -360,8 +361,8 @@ const normalizeFinancingTransaction = (row) => {
   paymentMethod: row.payment_method || '',
   reference: row.reference || '',
   notes: noteMetadata.notes,
-  accountingTreatment: noteMetadata.treatment,
-  profitOwnerId: noteMetadata.profitOwnerId,
+  accountingTreatment: isLoanReceivable(row.entry_type) ? '' : noteMetadata.treatment,
+  profitOwnerId: isLoanReceivable(row.entry_type) ? null : noteMetadata.profitOwnerId,
   createdAt: row.created_at,
   })
 }
@@ -444,7 +445,7 @@ export async function saveFinancingTransaction(entry) {
     reference: entry.reference || '',
     notes: packFinancingNotes(
       entry.notes,
-      entry.accountingTreatment || (entry.type === 'owner_distribution' ? 'partner_profit' : ''),
+      isLoanReceivable(entry.type) ? '' : entry.accountingTreatment || (entry.type === 'owner_distribution' ? 'partner_profit' : ''),
       entry.profitOwnerId || entry.ownerId || null,
     ),
   }).select('*').single()
@@ -479,7 +480,7 @@ export async function updateFinancingTransaction(entryId, entry) {
     entry_date: entry.date,
     payment_method: entry.paymentMethod || '',
     reference: entry.reference || '',
-    notes: packFinancingNotes(entry.notes, entry.accountingTreatment, entry.profitOwnerId),
+    notes: packFinancingNotes(entry.notes, isLoanReceivable(entry.type) ? '' : entry.accountingTreatment, entry.profitOwnerId),
     updated_at: new Date().toISOString(),
   }).eq('id', entryId).select('*').single()
   if (error) throw error
@@ -488,6 +489,9 @@ export async function updateFinancingTransaction(entryId, entry) {
 
 export async function updateFinancingTransactionTreatment(entryId, treatment = '', profitOwnerId = null, notes = '') {
   if (!supabase) throw new Error('Supabase is not configured')
+  const { data: entry, error: entryError } = await supabase.from('project_financing_transactions').select('entry_type').eq('id', entryId).single()
+  if (entryError) throw entryError
+  if (isLoanReceivable(entry.entry_type) && treatment) throw new Error('Loan receivables must stay outside project costs and partner profit.')
   if (treatment && !['project_cost', 'partner_profit'].includes(treatment)) throw new Error('Select a valid accounting treatment')
   const { data, error } = await supabase.from('project_financing_transactions').update({
     notes: packFinancingNotes(notes, treatment, profitOwnerId),

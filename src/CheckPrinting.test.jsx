@@ -236,7 +236,8 @@ describe('CheckPrinting', () => {
     expect(screen.getByRole('heading', { name: 'Check #1042' })).toBeInTheDocument()
   })
 
-  it('explains when the check number is already saved', () => {
+  it('opens an existing draft for printing without saving it twice', async () => {
+    window.print = vi.fn()
     const onSaveCheck = vi.fn()
     render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} checks={[savedCheck]} onSaveCheck={onSaveCheck} />)
 
@@ -244,7 +245,14 @@ describe('CheckPrinting', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save check to register' }))
 
     expect(screen.getByRole('alert')).toHaveTextContent('Check #1042 is already saved for Tryon Rd')
-    expect(screen.getByRole('alert')).toHaveTextContent('view or reprint it')
+    expect(screen.getByRole('alert')).toHaveTextContent('Status: draft')
+    expect(screen.getByText(/Draft — not printed/)).toBeInTheDocument()
+    expect(onSaveCheck).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Open saved check #1042' }))
+    expect(screen.getByRole('heading', { name: 'Check #1042' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Reprint saved check' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Print saved check' }))
+    await waitFor(() => expect(window.print).toHaveBeenCalled())
     expect(onSaveCheck).not.toHaveBeenCalled()
   })
 
@@ -340,8 +348,11 @@ describe('CheckPrinting', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reprint voided check' }))
     expect(onUpdateStatus).not.toHaveBeenCalled()
-    expect(screen.getByText(/change its register status from Voided to Printed/)).toBeInTheDocument()
+    expect(screen.getByText(/It stays voided until you confirm/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Confirm reprint' }))
+    await waitFor(() => expect(window.print).toHaveBeenCalled())
+    expect(onUpdateStatus).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm check printed' }))
     await waitFor(() => expect(onUpdateStatus).toHaveBeenCalledWith(1, 'printed'))
     await waitFor(() => expect(window.print).toHaveBeenCalled())
   })
@@ -797,6 +808,21 @@ describe('CheckPrinting', () => {
     expect(onOpenDocument).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps a cancelled print draft and unpaid until printing is explicitly confirmed', async () => {
+    window.print = vi.fn()
+    const onUpdateStatus = vi.fn()
+    render(<CheckPrinting project={{ id: 7, name: 'Tryon Rd' }} checks={[savedCheck]} onUpdateStatus={onUpdateStatus} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(window.print).toHaveBeenCalled())
+    window.dispatchEvent(new Event('afterprint'))
+    expect(onUpdateStatus).not.toHaveBeenCalled()
+    expect(screen.getByText('Its status stays draft until you confirm the paper check printed.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Did not print / Cancelled' }))
+    expect(screen.queryByRole('button', { name: 'Confirm check printed' })).not.toBeInTheDocument()
+    expect(onUpdateStatus).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Print' })).toBeInTheDocument()
+  })
+
   it('prints and voids checks while retaining the register entry', async () => {
     window.print = vi.fn()
     const onUpdateStatus = vi.fn().mockImplementation(async (_id, status) => ({ ...savedCheck, status }))
@@ -806,6 +832,9 @@ describe('CheckPrinting', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View check' }))
     expect(screen.getByLabelText('Saved check preview 1042')).toHaveTextContent('Foundation materials')
     fireEvent.click(screen.getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(window.print).toHaveBeenCalled())
+    expect(onUpdateStatus).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm check printed' }))
     await waitFor(() => expect(onUpdateStatus).toHaveBeenCalledWith(1, 'printed'))
     await waitFor(() => expect(window.print).toHaveBeenCalled())
     expect(document.body.querySelector(':scope > .print-check-sheet')).toHaveClass('print-page-direct')

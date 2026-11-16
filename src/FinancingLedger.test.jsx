@@ -23,6 +23,24 @@ const renderLedger = (overrides = {}) => {
 }
 
 describe('FinancingLedger', () => {
+  it('plans a loan given and prepares a borrower check without a construction cost', async () => {
+    const props = renderLedger()
+    fireEvent.change(screen.getByLabelText('Financing entry type'), { target: { value: 'loan_given' } })
+    expect(screen.getByLabelText('Financing entry status')).toHaveValue('planned')
+    fireEvent.change(screen.getByLabelText('Financing counterparty'), { target: { value: 'Sercan Kaan Yildirim' } })
+    fireEvent.change(screen.getByLabelText('Financing amount'), { target: { value: '10000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save planned & prepare check' }))
+    await waitFor(() => expect(props.onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'loan_given', status: 'planned', amount: 10000, counterparty: 'Sercan Kaan Yildirim', ownerId: null, paymentMethod: 'check' })))
+    expect(props.onPrepareCheck).toHaveBeenCalledWith(expect.objectContaining({ payee: 'Sercan Kaan Yildirim', amount: 10000, memo: 'Loan given / receivable' }))
+  })
+
+  it('keeps a pending borrower loan out of cash and receivable balances', () => {
+    renderLedger({ entries: [{ id: 91, type: 'loan_given', status: 'planned', counterparty: 'Sercan Kaan Yildirim', amount: 10000, date: '2026-11-06', reference: '', notes: '', paymentMethod: 'check' }] })
+    expect(screen.getByText('Planned loan: $10,000.00')).toBeInTheDocument()
+    expect(screen.getByText('Advanced $0.00 · Principal returned $0.00 · Interest received $0.00')).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Project cost' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Deduct from partner profit' })).not.toBeInTheDocument()
+  })
   it('saves a builder payout without assigning it to an unrelated owner', async () => {
     const props = renderLedger()
     fireEvent.change(screen.getByLabelText('Financing entry type'), { target: { value: 'owner_distribution' } })

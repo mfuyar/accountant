@@ -9,6 +9,24 @@ vi.mock('./lib/gemini', () => ({
 }))
 
 describe('IncomeSection', () => {
+  it('shows paid interest by building without changing draw or income totals', () => {
+    render(<IncomeSection
+      projects={[{ id: 2, name: 'Tryon Rd' }]}
+      incomes={[{ id: 1, projectId: 2, type: 'loan_draw', description: 'First draw', amount: 39000, lotBreakdown: [{ lot: 'Lot 2', amount: 13200 }] }]}
+      costs={[
+        { costId: 'interest', projectId: 2, name: 'Providence loan 0784 interest', phase: 'construction', mainCategory: 'Construction Financing Costs', subcategory: 'Construction Loan Interest', amount: 774.92, paymentDate: '2026-06-17', lotAllocations: [{ lot: 'Lot 2', amount: 774.92 }] },
+        { costId: 'other-project', projectId: 3, name: 'Providence interest', phase: 'construction', mainCategory: 'Construction Financing Costs', subcategory: 'Construction Loan Interest', amount: 999, paymentDate: '2026-06-17' },
+      ]}
+    />)
+    const plan = screen.getByRole('heading', { name: 'Providence advances by lot' }).closest('section')
+    expect(within(plan).getByText('Advanced to date').parentElement).toHaveTextContent('$39,000.00')
+    expect(within(plan).getByText('Paid interest', { selector: 'span' }).parentElement).toHaveTextContent('$774.92')
+    expect(within(plan).getByRole('row', { name: /Lot 2.*0784/ })).toHaveTextContent('$774.92')
+    expect(screen.getByText('Total income').parentElement).toHaveTextContent('$39,000.00')
+    expect(within(plan).getByText(/Paid interest is included in construction costs/)).toBeInTheDocument()
+    expect(within(plan).getByRole('table', { name: 'Paid construction interest' })).toHaveTextContent('2026-06-17')
+  })
+
   it('shows linked pre-sale funding once as income and does not offer duplicate edit actions', () => {
     render(<IncomeSection
       incomes={[{

@@ -227,7 +227,7 @@ const validateCostDocument = (file) => {
   return ''
 }
 
-function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions, constructionDrafts = [], projectChecks = [], lotCommitments = [], activeProjectId = null, projectName = 'Project', initialParentCostId = null, initialEditCostId = null, onBack, onAddDevelopmentCost, onEditDevelopmentCost, onDeleteDevelopmentCost, onUploadDocument, onAttachDocument, onOpenDocument, onCreateCheck, onMergeBreakdowns, onAddItemsToGroup, onUnmergeGroup, onSaveConstructionDraft, onConvertConstructionDraft, sharedDevelopmentCostTotal = 0 }) {
+function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions, constructionDrafts = [], projectChecks = [], lotCommitments = [], activeProjectId = null, projectName = 'Project', initialParentCostId = null, initialEditCostId = null, initialPhase = 'development', onBack, onAddDevelopmentCost, onEditDevelopmentCost, onDeleteDevelopmentCost, onUploadDocument, onAttachDocument, onOpenDocument, onCreateCheck, onMergeBreakdowns, onAddItemsToGroup, onUnmergeGroup, onSaveConstructionDraft, onConvertConstructionDraft, sharedDevelopmentCostTotal = 0 }) {
   const getDefaultOwnerId = (ownerList) => {
     const normalized = (value) => value?.toLowerCase().replace(/\s+/g, '').trim()
     const greenfortOwner = (ownerList || []).find((owner) => {
@@ -244,7 +244,7 @@ function CostPage({ owners, developmentCosts, breakdownCosts = [], costVersions,
   const [costAmount, setCostAmount] = useState('')
   const [costDate, setCostDate] = useState(() => initialParentCost?.date || '')
   const [selectedOwnerId, setSelectedOwnerId] = useState(() => initialParentCost?.ownerId ?? getDefaultOwnerId(owners))
-  const [costPhase, setCostPhase] = useState(() => initialParentCost?.phase || 'development')
+  const [costPhase, setCostPhase] = useState(() => initialParentCost?.phase || initialPhase)
   const [costCategory, setCostCategory] = useState(() => initialParentCost?.category || '')
   const [vendorName, setVendorName] = useState(() => initialParentCost?.vendorName || '')
   const [mainCategory, setMainCategory] = useState(() => initialParentCost?.mainCategory || '')
