@@ -8,6 +8,15 @@ const interest = {
 }
 
 describe('construction interest', () => {
+  it('keeps full SBA principal-and-interest costs out of the interest-only total', () => {
+    const result = summarizeConstructionInterest([
+      { ...interest, costId: 'sba', name: 'Banu SBA — Construction', category: 'Financing costs', subcategory: 'Other Financing Costs', amount: 600 },
+      { ...interest, costId: 'flagstar', name: 'Flagstar HELOC interest — Construction', amount: 5401.98, lotAllocations: [] },
+    ])
+    expect(result.paid).toBe(5401.98)
+    expect(result.payments.map((payment) => payment.costId)).toEqual(['flagstar'])
+  })
+
   it('counts paid interest once while excluding breakdowns, unpaid interest, land interest and fees', () => {
     const result = summarizeConstructionInterest([
       interest,

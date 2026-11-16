@@ -66,6 +66,10 @@ async function request(path, options = {}) {
 const history = await request(`cost_versions?select=*&project_id=eq.2&order=version.desc`)
 const prior = history.find((row) => row.cost_id === SBA_COST_IDS[0])
 if (!prior || prior.owner_id !== 9 || prior.deleted_at) throw new Error('Missing Banu SBA cost')
+if (prior.attachments.some((item) => item._type === 'banu_financing_phase_policy')) {
+  console.log('SBA history was reconciled and subsequently split by construction date; use the current phase groups. No changes made.')
+  process.exit(0)
+}
 const existing = new Map()
 history.forEach((row) => { if (!existing.has(row.cost_id)) existing.set(row.cost_id, row) })
 const children = [...existing.values()].filter((row) => !row.deleted_at && row.parent_cost_id === prior.cost_id)

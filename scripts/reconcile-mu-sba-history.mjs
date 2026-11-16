@@ -69,6 +69,10 @@ async function request(path, options = {}) {
 const history = await request(`cost_versions?select=*&project_id=eq.2&order=version.desc`)
 const latest = schedule.costIds.map((id) => history.find((row) => row.cost_id === id))
 if (latest.some((row) => !row || row.deleted_at)) throw new Error('Missing MU loan or parent')
+if (latest[0].attachments.some((item) => item._type === 'banu_financing_phase_policy')) {
+  console.log('MU SBA history was reconciled and subsequently split by construction date; use the current phase groups. No changes made.')
+  process.exit(0)
+}
 const marker = latest[0].attachments.find((item) => item._type === 'mu_sba_history_reconciliation')
 const activeById = new Map()
 history.forEach((row) => { if (!activeById.has(row.cost_id)) activeById.set(row.cost_id, row) })
