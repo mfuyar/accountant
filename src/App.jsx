@@ -7,6 +7,8 @@ import IncomeSection from './IncomeSection'
 import LotCommitments from './LotCommitments'
 import SpendingByJob from './SpendingByJob'
 import ConstructionLedger from './ConstructionLedger'
+import OwnerContributions from './OwnerContributions'
+import { isOwnerCapitalEntry, summarizeOwnerCapital } from './lib/ownerCapital'
 import AttachmentPreviewModal from './AttachmentPreviewModal'
 import TaxAudit from './TaxAudit'
 import BankDashboard from './BankDashboard'
@@ -431,6 +433,9 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
   const totalOwnerContribution = useMemo(() => {
     return owners.reduce((sum, owner) => sum + Number(owner.contributionAmount || 0), 0)
   }, [owners])
+  const ownerCapitalEntries = useMemo(() => financingTransactions.filter((entry) => isOwnerCapitalEntry(entry) && String(entry.projectId) === String(activeProjectId)), [financingTransactions, activeProjectId])
+  const ownerCapitalBalances = useMemo(() => summarizeOwnerCapital(ownerCapitalEntries, owners), [ownerCapitalEntries, owners])
+  const totalOwnerFunding = totalOwnerContribution + ownerCapitalBalances.reduce((sum, row) => sum + row.balance, 0)
 
   const projectCostVersions = useMemo(
     () => developmentCosts.filter((cost) => String(cost.projectId ?? '') === String(activeProjectId ?? '')),
@@ -1771,6 +1776,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
             ['construction-ledger', 'Construction Ledger'],
             ['income', 'Draws & Income'],
             ['partners', 'Partners'],
+            ['owner-capital', 'Owner Contributions'],
             ['financing', 'Loans, Receivables & Payouts'],
             ['bank', 'Bank'],
             ['checks', 'Checks'],
@@ -2184,23 +2190,23 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
                   <strong>{owner.name}</strong>
                   <p>{Number(owner.ownershipPercentage ?? 50).toFixed(2)}% ownership · separately tracked contribution</p>
                 </div>
-                <div>{currency.format(Number(owner.contributionAmount || 0))}</div>
+                <div>{currency.format(Number(owner.contributionAmount || 0) + (ownerCapitalBalances.find((row) => String(row.ownerId) === String(owner.id))?.balance || 0))}{ownerCapitalBalances.some((row) => String(row.ownerId) === String(owner.id)) ? <small>Includes owner-paid contribution due back: {currency.format(ownerCapitalBalances.find((row) => String(row.ownerId) === String(owner.id)).balance)}</small> : null}</div>
                 <button type="button" className="secondary-button" onClick={() => handleStartOwnerEdit(owner)}>Edit owner</button>
               </div>
             ))}
             <div className="table-row total-row">
               <div>
-                <strong>Combined project cost</strong>
-                <p>Owner contributions + project spend</p>
+                <strong>Owner funding recorded</strong>
+                <p>Cash contributions plus owner-paid financing, less contribution returns</p>
               </div>
-              <div>{currency.format(totalOwnerContribution)}</div>
+              <div>{currency.format(totalOwnerFunding)}</div>
             </div>
             <div className="table-row total-row">
               <div>
                 <strong>Greenfort project cost</strong>
-                <p>Owner costs plus project spend</p>
+                <p>Recorded project costs and transactions, excluding owner funding</p>
               </div>
-              <div>{currency.format(totalOwnerContribution + ownerCostTotal + projectTransactions.reduce((sum, transaction) => sum + transaction.amount, 0))}</div>
+              <div>{currency.format(ownerCostTotal + projectTransactions.reduce((sum, transaction) => sum + transaction.amount, 0))}</div>
             </div>
           </div>
         </div>
@@ -2385,6 +2391,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
         breakdowns={activeBreakdownCosts}
         owners={owners}
         incomes={projectIncomes}
+        ownerCapitalEntries={ownerCapitalEntries}
         onUpdateCostCategory={(cost, category) => handleCostPageEdit({
           ...accountingCostRecords.find((entry) => String(entry.costId) === String(cost.costId)),
           costId: cost.costId,
@@ -2411,7 +2418,7 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       {showProjectSection('financing') && activeProject ? <FinancingLedger
         project={activeProject}
         owners={owners}
-        entries={financingTransactions}
+        entries={financingTransactions.filter((entry) => !isOwnerCapitalEntry(entry))}
         onSave={handleSaveFinancingTransaction}
         onDelete={handleDeleteFinancingTransaction}
         onStatusChange={handleFinancingStatusChange}
@@ -2423,9 +2430,18 @@ function App({ accessProfile = null, authUser = null, onSignOut = null, onUpdate
       {showProjectSection('partners') && activeProject ? <PartnersSection
         project={activeProject}
         owners={owners}
-        entries={financingTransactions}
+        entries={financingTransactions.filter((entry) => !isOwnerCapitalEntry(entry))}
         onSave={handleSaveFinancingTransaction}
         onDelete={handleDeleteFinancingTransaction}
+      /> : null}
+
+      {showProjectSection('owner-capital') && activeProject ? <OwnerContributions
+        project={activeProject}
+        owners={owners}
+        entries={ownerCapitalEntries}
+        onSave={handleSaveFinancingTransaction}
+        onStatusChange={handleFinancingStatusChange}
+        onOpenDocument={handleOpenCostDocument}
       /> : null}
 
       {overviewPreviewAttachment ? <AttachmentPreviewModal

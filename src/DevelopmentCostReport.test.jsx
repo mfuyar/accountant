@@ -3,6 +3,13 @@ import { describe, expect, it, vi } from 'vitest'
 import DevelopmentCostReport from './DevelopmentCostReport'
 
 describe('DevelopmentCostReport', () => {
+  it('reports repayable owner capital without increasing project costs', () => {
+    render(<DevelopmentCostReport project={{ name: 'Tryon', totalBudget: 10000 }} costs={[{ costId: 'cost', name: 'Concrete', phase: 'construction', amount: 1000, lotAllocations: [] }]}
+      owners={[{ id: 9, name: 'Banugul' }]} ownerCapitalEntries={[{ id: 1, ownerId: 9, type: 'owner_contribution', status: 'completed', amount: 2000, counterparty: 'Banugul' }]} />)
+    expect(screen.getByText('Recorded costs').parentElement).toHaveTextContent('$1,000.00')
+    expect(screen.getByRole('heading', { name: 'Repayable owner contributions — outside project costs' }).closest('section')).toHaveTextContent('$2,000.00 due back')
+  })
+
   it('shows pre-sale deposit funding separately from the development costs it funds', () => {
     render(<DevelopmentCostReport
       project={{ name: 'Tryon', totalBudget: 1000000 }}

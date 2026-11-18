@@ -3,6 +3,7 @@ import { summarizeDevelopmentFunding } from './lib/developmentFunding'
 import { inferCostSubcategory, inferMainCostCategory, payerLabel } from './lib/accountingTaxonomy'
 import { currency } from './lib/currency'
 import { safeCsvText } from './lib/csvSecurity'
+import { summarizeOwnerCapital } from './lib/ownerCapital'
 
 const COST_CATEGORIES = [
   'Land cost', 'Permits & municipal fees', 'Site utilities', 'Site work', 'Foundation',
@@ -181,7 +182,7 @@ const DevelopmentLedgerSections = ({ costs, breakdowns, onEditCost, onAddBreakdo
   </section>
 }
 
-const ReportContent = ({ project, costs, breakdowns, owners, incomes, summary, ledgerRows, generatedAt, categoryDrafts, savingCategoryId, categoryMessage, pendingDeleteId, deletingCostId, onCategoryDraft, onSaveCategory, onEditCost, onAddBreakdown, onRequestDelete, onCancelDelete }) => {
+const ReportContent = ({ project, costs, breakdowns, owners, incomes, ownerCapitalEntries, summary, ledgerRows, generatedAt, categoryDrafts, savingCategoryId, categoryMessage, pendingDeleteId, deletingCostId, onCategoryDraft, onSaveCategory, onEditCost, onAddBreakdown, onRequestDelete, onCancelDelete }) => {
   const rawBudget = project?.totalBudget ?? project?.total_budget
   const budget = Number(rawBudget)
   const hasBudget = rawBudget !== null && rawBudget !== undefined && rawBudget !== '' && Number.isFinite(budget) && budget > 0
@@ -201,6 +202,7 @@ const ReportContent = ({ project, costs, breakdowns, owners, incomes, summary, l
     )).reduce((sum, row) => sum + Number(row.amount || 0), 0),
   }))
   const totalOwnerContributions = ownerContributionRows.reduce((sum, row) => sum + row.amount, 0)
+  const repayableContributions = summarizeOwnerCapital(ownerCapitalEntries, owners)
   return <div className="development-report-document">
     <header className="development-report-title">
       <div><p>Greenfort Accountant</p><h1>Development Cost Summary</h1><h2>{project?.name || 'Project'}</h2></div>
@@ -248,6 +250,11 @@ const ReportContent = ({ project, costs, breakdowns, owners, incomes, summary, l
           return <article key={row.name}><span>{row.name} · {row.ownershipPercentage.toFixed(2)}%</span><strong>{currency.format(row.amount)}</strong><small>{difference >= 0 ? `${currency.format(difference)} above` : `${currency.format(Math.abs(difference))} below`} proportional owner-funded share</small></article>
         })}
       </div>
+    </section> : null}
+    {repayableContributions.length ? <section className="development-owner-equalization">
+      <h3>Repayable owner contributions — outside project costs</h3>
+      <p>Owner-paid personal financing is tracked separately. Returning contributions reduces the amount owed to the owner, without adding project spending or deducting profit.</p>
+      <div className="development-owner-equalization-grid">{repayableContributions.map((row) => <article key={row.ownerId}><span>{row.name}</span><strong>{currency.format(row.balance)} due back</strong><small>Contributed {currency.format(row.contributed)} · Returned {currency.format(row.returned)} · Pending {currency.format(row.pending)}</small></article>)}</div>
     </section> : null}
     <section className="development-category-ledger">
       <div className="development-category-ledger-heading">
@@ -307,7 +314,7 @@ const ReportContent = ({ project, costs, breakdowns, owners, incomes, summary, l
   </div>
 }
 
-function DevelopmentCostReport({ project, costs = [], breakdowns = [], owners = [], incomes = [], onUpdateCostCategory = null, onEditCost = null, onAddBreakdown = null, onDeleteCost = null }) {
+function DevelopmentCostReport({ project, costs = [], breakdowns = [], owners = [], incomes = [], ownerCapitalEntries = [], onUpdateCostCategory = null, onEditCost = null, onAddBreakdown = null, onDeleteCost = null }) {
   const reportRef = useRef(null)
   const [categoryDrafts, setCategoryDrafts] = useState({})
   const [savingCategoryId, setSavingCategoryId] = useState(null)
@@ -440,7 +447,7 @@ function DevelopmentCostReport({ project, costs = [], breakdowns = [], owners = 
         <div><p className="eyebrow">Project reporting</p><h2>Development Cost Summary</h2><p>Budget position and recorded project costs by phase, category, and lot.</p></div>
         <div className="button-row"><button type="button" className="secondary-button" onClick={exportCsv}>Export CSV</button><button type="button" className="secondary-button" onClick={exportExcel}>Export Excel</button><button type="button" className="action-button" onClick={printReport}>Print / Save PDF</button></div>
       </div>
-      <div ref={reportRef}><ReportContent project={project} costs={costs} breakdowns={breakdowns} owners={owners} incomes={incomes} summary={summary} ledgerRows={ledgerRows} generatedAt={generatedAt} categoryDrafts={categoryDrafts} savingCategoryId={savingCategoryId} categoryMessage={categoryMessage} pendingDeleteId={pendingDeleteId} deletingCostId={deletingCostId} onCategoryDraft={(costId, category) => setCategoryDrafts((current) => ({ ...current, [costId]: category }))} onSaveCategory={onUpdateCostCategory ? saveCategory : null} onEditCost={onEditCost} onAddBreakdown={onAddBreakdown} onRequestDelete={onDeleteCost ? requestDelete : null} onCancelDelete={() => setPendingDeleteId(null)} /></div>
+      <div ref={reportRef}><ReportContent project={project} costs={costs} breakdowns={breakdowns} owners={owners} incomes={incomes} ownerCapitalEntries={ownerCapitalEntries} summary={summary} ledgerRows={ledgerRows} generatedAt={generatedAt} categoryDrafts={categoryDrafts} savingCategoryId={savingCategoryId} categoryMessage={categoryMessage} pendingDeleteId={pendingDeleteId} deletingCostId={deletingCostId} onCategoryDraft={(costId, category) => setCategoryDrafts((current) => ({ ...current, [costId]: category }))} onSaveCategory={onUpdateCostCategory ? saveCategory : null} onEditCost={onEditCost} onAddBreakdown={onAddBreakdown} onRequestDelete={onDeleteCost ? requestDelete : null} onCancelDelete={() => setPendingDeleteId(null)} /></div>
     </section>
   </>
 }

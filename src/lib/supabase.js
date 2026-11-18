@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { isLoanReceivable } from './loanReceivables'
+import { isOwnerCapitalType, ownerCapitalStorage, readOwnerCapitalNotes } from './ownerCapital'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -349,10 +350,11 @@ const packFinancingNotes = (notes = '', treatment = '', profitOwnerId = null) =>
 
 const normalizeFinancingTransaction = (row) => {
   const noteMetadata = unpackFinancingNotes(row.notes)
+  const ownerCapital = readOwnerCapitalNotes(noteMetadata.notes)
   return ({
   id: row.id,
   projectId: row.project_id,
-  type: row.entry_type,
+  type: ownerCapital.capital ? ownerCapital.capital.kind === 'return' ? 'owner_contribution_return' : 'owner_contribution' : row.entry_type,
   status: row.entry_status,
   counterparty: row.counterparty,
   ownerId: row.owner_id,
@@ -360,9 +362,10 @@ const normalizeFinancingTransaction = (row) => {
   date: row.entry_date,
   paymentMethod: row.payment_method || '',
   reference: row.reference || '',
-  notes: noteMetadata.notes,
-  accountingTreatment: isLoanReceivable(row.entry_type) ? '' : noteMetadata.treatment,
-  profitOwnerId: isLoanReceivable(row.entry_type) ? null : noteMetadata.profitOwnerId,
+  notes: ownerCapital.notes,
+  capital: ownerCapital.capital,
+  accountingTreatment: ownerCapital.capital || isLoanReceivable(row.entry_type) ? '' : noteMetadata.treatment,
+  profitOwnerId: ownerCapital.capital || isLoanReceivable(row.entry_type) ? null : noteMetadata.profitOwnerId,
   createdAt: row.created_at,
   })
 }
@@ -433,9 +436,10 @@ export async function fetchProjectWorkspace(projectId) {
 
 export async function saveFinancingTransaction(entry) {
   if (!supabase) throw new Error('Supabase is not configured')
+  const storage = ownerCapitalStorage(entry)
   const { data, error } = await supabase.from('project_financing_transactions').insert({
     project_id: entry.projectId,
-    entry_type: entry.type,
+    entry_type: storage.type,
     entry_status: entry.status,
     counterparty: entry.counterparty,
     owner_id: entry.ownerId || null,
@@ -444,8 +448,8 @@ export async function saveFinancingTransaction(entry) {
     payment_method: entry.paymentMethod || '',
     reference: entry.reference || '',
     notes: packFinancingNotes(
-      entry.notes,
-      isLoanReceivable(entry.type) ? '' : entry.accountingTreatment || (entry.type === 'owner_distribution' ? 'partner_profit' : ''),
+      storage.notes,
+      isOwnerCapitalType(entry.type) || isLoanReceivable(entry.type) ? '' : entry.accountingTreatment || (entry.type === 'owner_distribution' ? 'partner_profit' : ''),
       entry.profitOwnerId || entry.ownerId || null,
     ),
   }).select('*').single()
@@ -471,16 +475,17 @@ export async function updateFinancingTransactionStatus(entryId, status) {
 
 export async function updateFinancingTransaction(entryId, entry) {
   if (!supabase) throw new Error('Supabase is not configured')
+  const storage = ownerCapitalStorage(entry)
   const { data, error } = await supabase.from('project_financing_transactions').update({
-    entry_type: entry.type,
+    entry_type: storage.type,
     entry_status: entry.status,
     counterparty: entry.counterparty,
-    owner_id: entry.type === 'owner_distribution' ? entry.ownerId || null : null,
+    owner_id: entry.type === 'owner_distribution' || isOwnerCapitalType(entry.type) ? entry.ownerId || null : null,
     amount: entry.amount,
     entry_date: entry.date,
     payment_method: entry.paymentMethod || '',
     reference: entry.reference || '',
-    notes: packFinancingNotes(entry.notes, isLoanReceivable(entry.type) ? '' : entry.accountingTreatment, entry.profitOwnerId),
+    notes: packFinancingNotes(storage.notes, isOwnerCapitalType(entry.type) || isLoanReceivable(entry.type) ? '' : entry.accountingTreatment, entry.profitOwnerId),
     updated_at: new Date().toISOString(),
   }).eq('id', entryId).select('*').single()
   if (error) throw error
@@ -489,9 +494,10 @@ export async function updateFinancingTransaction(entryId, entry) {
 
 export async function updateFinancingTransactionTreatment(entryId, treatment = '', profitOwnerId = null, notes = '') {
   if (!supabase) throw new Error('Supabase is not configured')
-  const { data: entry, error: entryError } = await supabase.from('project_financing_transactions').select('entry_type').eq('id', entryId).single()
+  const { data: entry, error: entryError } = await supabase.from('project_financing_transactions').select('entry_type,notes').eq('id', entryId).single()
   if (entryError) throw entryError
   if (isLoanReceivable(entry.entry_type) && treatment) throw new Error('Loan receivables must stay outside project costs and partner profit.')
+  if (readOwnerCapitalNotes(entry.notes).capital && treatment) throw new Error('Owner contributions and returns stay outside project costs and profit payouts.')
   if (treatment && !['project_cost', 'partner_profit'].includes(treatment)) throw new Error('Select a valid accounting treatment')
   const { data, error } = await supabase.from('project_financing_transactions').update({
     notes: packFinancingNotes(notes, treatment, profitOwnerId),

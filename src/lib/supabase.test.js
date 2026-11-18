@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildLegacyIncomeAttachments, buildProjectCostTotals, buildProjectWorkspace } from './supabase'
+import { ownerCapitalStorage } from './ownerCapital'
 
 describe('legacy income persistence', () => {
   it('keeps every partial refund when activity_breakdown is unavailable', () => {
@@ -40,6 +41,16 @@ describe('buildProjectCostTotals', () => {
 })
 
 describe('buildProjectWorkspace', () => {
+  it('loads owner contributions as repayable capital rather than loans, costs or profit payouts', () => {
+    const ok = { data: [], error: null }
+    const stored = ownerCapitalStorage({ type: 'owner_contribution', ownerId: 9, notes: 'Owner paid SBA.', capital: { loanNumber: '3600818310' } })
+    const workspace = buildProjectWorkspace({ categoriesResult: ok, invoicesResult: ok, transactionsResult: ok, costsResult: ok, incomesResult: ok, reviewResult: ok, draftsResult: ok, checksResult: ok, lotCommitmentsResult: ok,
+      financingResult: { data: [{ id: 100, project_id: 2, entry_type: stored.type, entry_status: 'completed', owner_id: 9, counterparty: 'Banugul', amount: 150, entry_date: '2026-11-15', notes: stored.notes }], error: null },
+    })
+    expect(workspace.costVersions).toEqual([])
+    expect(workspace.financingTransactions[0]).toMatchObject({ type: 'owner_contribution', accountingTreatment: '', profitOwnerId: null, ownerId: 9, amount: 150, notes: 'Owner paid SBA.', capital: { loanNumber: '3600818310', reimbursable: true } })
+  })
+
   it('loads pre-sale activity from the backward-compatible income envelope', () => {
     const ok = { data: [], error: null }
     const workspace = buildProjectWorkspace({

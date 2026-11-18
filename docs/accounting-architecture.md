@@ -9,6 +9,12 @@ Every ledger entry has two independent dimensions:
 
 An owner-paid engineering invoice remains an Engineering project cost and is also included in that owner's contribution report. It is never recategorized as an "Owner contribution" expense.
 
+Owner-paid personal SBA/Flagstar financing has a separate, user-authorized
+treatment: it is recorded as repayable owner capital, outside project spending.
+Individual payments and source evidence remain in the owner-capital financing
+ledger; returning that capital reduces the balance owed without creating another
+expense or partner-profit payout. See `monthly-sba.md` for the audit and schedule.
+
 ## Application layers
 
 - `cost_versions` is the immutable, versioned project-cost ledger. The latest non-deleted version is exposed through `active_costs`.
