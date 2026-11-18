@@ -25,6 +25,12 @@ describe('CheckPrinting', () => {
     const onAttachInvoice = vi.fn().mockResolvedValue({})
     const onEditCost = vi.fn()
     render(<CheckPrinting project={{ id: 7 }} costs={[cost]} onAttachInvoice={onAttachInvoice} onEditCost={onEditCost} />)
+    const panel = screen.getByRole('heading', { name: 'Construction costs, invoices & payments' }).closest('details')
+    expect(panel).not.toHaveAttribute('open')
+    fireEvent.click(panel.querySelector('summary'))
+    const row = screen.getByLabelText('View details for Chris Framing').closest('details')
+    expect(row).not.toHaveAttribute('open')
+    fireEvent.click(row.querySelector('summary'))
     const file = new File(['invoice'], 'framing.pdf', { type: 'application/pdf' })
     fireEvent.change(screen.getByLabelText('Add invoice for Chris Framing'), { target: { files: [file] } })
     await waitFor(() => expect(onAttachInvoice).toHaveBeenCalledWith(cost, file))
@@ -81,6 +87,7 @@ describe('CheckPrinting', () => {
     />)
 
     expect(screen.getByRole('heading', { name: 'Construction costs, invoices & payments' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('heading', { name: 'Construction costs, invoices & payments' }).closest('summary'))
     expect(screen.getByText('Under-slab plumbing')).toBeInTheDocument()
     expect(screen.getByText('Roofing labor')).toBeInTheDocument()
     expect(screen.getByText('$14,880.00')).toBeInTheDocument()
@@ -88,6 +95,31 @@ describe('CheckPrinting', () => {
     fireEvent.change(screen.getByLabelText('Filter construction invoice coverage'), { target: { value: 'missing_invoice' } })
     expect(screen.getByText('Roofing labor')).toBeInTheDocument()
     expect(screen.queryByText('Under-slab plumbing')).not.toBeInTheDocument()
+  })
+
+  it('limits the long cost list to one page and resets pagination when searching or filtering by lot', () => {
+    const costs = Array.from({ length: 25 }, (_, index) => ({ costId: `cost-${index + 1}`, name: `Cost ${String(index + 1).padStart(2, '0')}`,
+      phase: 'construction', amount: 100, date: '2026-11-18', vendorName: index === 10 ? 'Maynor' : 'SBS',
+      lotAllocations: [{ lot: index === 10 ? 'Lot 2' : 'Lot 1', amount: 100 }], attachments: [] }))
+    render(<CheckPrinting project={{ id: 7 }} costs={costs} />)
+    const panel = screen.getByRole('heading', { name: 'Construction costs, invoices & payments' }).closest('details')
+    fireEvent.click(panel.querySelector('summary'))
+    expect(panel.querySelectorAll('.coverage-cost-row')).toHaveLength(10)
+    expect(within(panel).getByText('Showing 1–10 of 25 costs')).toBeInTheDocument()
+    expect(within(panel).queryByText('Cost 11')).not.toBeInTheDocument()
+    fireEvent.click(within(panel).getByRole('button', { name: 'Next costs' }))
+    expect(within(panel).getByText('Cost 11')).toBeInTheDocument()
+    expect(within(panel).getByText('Page 2 of 3')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Search construction costs'), { target: { value: 'Maynor' } })
+    expect(within(panel).getByText('Page 1 of 1')).toBeInTheDocument()
+    expect(panel.querySelectorAll('.coverage-cost-row')).toHaveLength(1)
+    expect(within(panel).getByRole('button', { name: 'Next costs' })).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Filter construction coverage lot'), { target: { value: 'Lot 1' } })
+    expect(within(panel).getByText('No construction costs match these filters.')).toBeInTheDocument()
+    fireEvent.click(within(panel).getByRole('button', { name: 'Clear cost filters' }))
+    fireEvent.change(screen.getByLabelText('Construction costs per page'), { target: { value: '25' } })
+    expect(panel.querySelectorAll('.coverage-cost-row')).toHaveLength(25)
+    expect(within(panel).getByText('$2,500.00')).toBeInTheDocument()
   })
 
   it('prefills a new check from a saved cost', async () => {

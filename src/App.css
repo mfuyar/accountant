@@ -686,7 +686,48 @@ button:disabled {
   gap: 18px;
   padding: 18px;
   cursor: pointer;
-  list-style-position: inside;
+  list-style: none;
+}
+
+.construction-cost-coverage > summary::-webkit-details-marker,
+.coverage-cost-row > summary::-webkit-details-marker { display: none; }
+.construction-cost-coverage > summary > .coverage-heading-total { flex: 0 0 auto; display: grid; justify-items: end; gap: 6px; white-space: nowrap; }
+.coverage-toggle-label::after { content: 'Show costs ▾'; color: #2563eb; font-size: 0.8rem; font-weight: 600; }
+.construction-cost-coverage[open] > summary .coverage-toggle-label::after { content: 'Hide costs ▴'; }
+.construction-cost-coverage .coverage-overview { margin-top: 6px; color: #64748b; font-size: 0.82rem; }
+.construction-cost-coverage > summary h2 { font-size: clamp(1.05rem, 2vw, 1.35rem); line-height: 1.35; }
+.coverage-totals-disclosure > summary { cursor: pointer; color: #475569; font-size: 0.85rem; padding: 4px 0 10px; }
+.coverage-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.coverage-toolbar label { display: grid; gap: 5px; min-width: 130px; flex: 1; font-size: 0.8rem; color: #475569; }
+.coverage-toolbar label:first-child { flex: 2; min-width: 180px; }
+.coverage-toolbar input, .coverage-toolbar select, .coverage-results-heading select { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid #dbe3ef; border-radius: 8px; background: #fff; color: #0f172a; font: inherit; }
+.coverage-results-heading, .coverage-pagination { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; color: #64748b; font-size: 0.8rem; }
+.coverage-results-heading label { display: flex; align-items: center; gap: 8px; }
+.coverage-results-heading select { width: auto; }
+.coverage-pagination { justify-content: center; }
+.coverage-pagination button:disabled { opacity: 0.4; cursor: default; }
+.coverage-cost-row { border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; overflow: hidden; }
+.coverage-cost-row.missing-invoice { border-left: 3px solid #f59e0b; }
+.coverage-cost-row > summary { display: flex; align-items: center; gap: 12px; padding: 12px; cursor: pointer; list-style: none; }
+.coverage-cost-identity { min-width: 0; flex: 1; display: grid; gap: 4px; }
+.coverage-cost-identity > strong { font-size: 0.88rem; line-height: 1.35; overflow-wrap: anywhere; }
+.coverage-cost-identity > span { color: #64748b; font-size: 0.76rem; }
+.coverage-cost-status { display: grid; justify-items: end; gap: 5px; flex-shrink: 0; }
+.coverage-cost-status > strong { font-size: 0.88rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.coverage-cost-status .construction-coverage-badges { justify-content: end; }
+.coverage-chevron { color: #94a3b8; font-size: 1.4rem; transition: transform 0.15s; }
+.coverage-cost-row[open] > summary .coverage-chevron { transform: rotate(90deg); }
+.coverage-cost-details { display: grid; gap: 10px; border-top: 1px solid #eef2f7; padding: 12px; background: #f8fafc; }
+.coverage-upload { position: relative; cursor: pointer; }
+.coverage-upload input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.coverage-upload:focus-within, .coverage-cost-row > summary:focus-visible, .construction-cost-coverage > summary:focus-visible { outline: 2px solid #2563eb; outline-offset: -2px; }
+
+@media (max-width: 600px) {
+  .construction-cost-coverage > summary > .coverage-heading-total { justify-items: start; }
+  .coverage-cost-row > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; }
+  .coverage-cost-status { grid-column: 1; justify-items: start; }
+  .coverage-cost-status .construction-coverage-badges { justify-content: start; }
+  .coverage-cost-row > summary .coverage-chevron { grid-column: 2; grid-row: 1 / 3; }
 }
 
 .construction-cost-coverage > summary > div {
@@ -730,34 +771,9 @@ button:disabled {
   background: #fff7f7;
 }
 
-.construction-coverage-filter {
-  justify-self: start;
-  min-width: min(100%, 300px);
-}
-
 .construction-coverage-list {
   display: grid;
   gap: 10px;
-}
-
-.construction-coverage-list article {
-  display: grid;
-  gap: 7px;
-  padding: 13px;
-  border: 1px solid #dbeafe;
-  border-radius: 12px;
-  background: #fff;
-}
-
-.construction-coverage-list article.missing-invoice {
-  border-color: #fecaca;
-  background: #fffafa;
-}
-
-.construction-coverage-title {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
 }
 
 .construction-coverage-badges {
@@ -783,10 +799,6 @@ button:disabled {
 .construction-coverage-badges span.warning {
   background: #fee2e2;
   color: #b91c1c;
-}
-
-.construction-coverage-list article > button {
-  justify-self: start;
 }
 
 .check-register-filters {
@@ -6362,8 +6374,7 @@ p.check-link-summary {
     grid-template-columns: 1fr;
   }
 
-  .construction-cost-coverage > summary,
-  .construction-coverage-title {
+  .construction-cost-coverage > summary {
     align-items: flex-start;
     flex-direction: column;
   }

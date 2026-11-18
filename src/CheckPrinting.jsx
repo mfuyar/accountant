@@ -240,6 +240,10 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
     } finally { setInvoiceUpload(null) }
   }
   const [constructionCoverageFilter, setConstructionCoverageFilter] = useState('all')
+  const [coverageSearch, setCoverageSearch] = useState('')
+  const [coverageLot, setCoverageLot] = useState('all')
+  const [coveragePage, setCoveragePage] = useState(1)
+  const [coveragePageSize, setCoveragePageSize] = useState(10)
   const previewPanelRef = useRef(null)
   const attachmentSelectRef = useRef(null)
   const mailingAddressRef = useRef(null)
@@ -372,13 +376,26 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
       .sort((left, right) => String(right.cost.date || '').localeCompare(String(left.cost.date || '')) || left.cost.name.localeCompare(right.cost.name))
   }, [checks, costs, invoices])
 
-  const visibleConstructionCoverage = useMemo(() => constructionCoverage.filter((entry) => (
-    constructionCoverageFilter === 'all'
+  const visibleConstructionCoverage = useMemo(() => constructionCoverage.filter((entry) => {
+    const search = coverageSearch.trim().toLowerCase()
+    const text = [entry.cost.name, entry.cost.vendorName, entry.cost.category, entry.cost.referenceNumber, entry.cost.date,
+      ...(entry.cost.lotAllocations || []).map((allocation) => allocation.lot),
+      ...entry.documents.map((document) => `${document.name || ''} ${document.reference || ''}`),
+      ...entry.relatedInvoices.map((invoice) => invoice.invoiceNumber || ''),
+    ].join(' ').toLowerCase()
+    return (!search || text.includes(search))
+      && (coverageLot === 'all' || (coverageLot === 'unassigned' ? !entry.cost.lotAllocations?.length : entry.cost.lotAllocations?.some((allocation) => allocation.lot === coverageLot)))
+      && (constructionCoverageFilter === 'all'
       || (constructionCoverageFilter === 'missing_invoice' && !entry.hasInvoice)
       || (constructionCoverageFilter === 'with_invoice' && entry.hasInvoice)
       || (constructionCoverageFilter === 'unpaid' && entry.paid + 0.009 < Number(entry.cost.amount || 0))
-      || (constructionCoverageFilter === 'paid' && entry.paid + 0.009 >= Number(entry.cost.amount || 0))
-  )), [constructionCoverage, constructionCoverageFilter])
+      || (constructionCoverageFilter === 'paid' && entry.paid + 0.009 >= Number(entry.cost.amount || 0)))
+  }), [constructionCoverage, constructionCoverageFilter, coverageSearch, coverageLot])
+  const coverageLots = [...new Set(constructionCoverage.flatMap((entry) => (entry.cost.lotAllocations || []).map((allocation) => allocation.lot)))].sort()
+  const coveragePageCount = Math.max(1, Math.ceil(visibleConstructionCoverage.length / coveragePageSize))
+  const currentCoveragePage = Math.min(coveragePage, coveragePageCount)
+  const coverageStart = (currentCoveragePage - 1) * coveragePageSize
+  const pagedConstructionCoverage = visibleConstructionCoverage.slice(coverageStart, coverageStart + coveragePageSize)
 
   const constructionCoverageTotals = useMemo(() => ({
     total: constructionCoverage.reduce((sum, entry) => sum + Number(entry.cost.amount || 0), 0),
@@ -1242,50 +1259,62 @@ function CheckPrinting({ project, checks = emptyList, invoices = emptyList, cost
         </section> : <div className="internal-transfer-notice"><strong>Internal bank transfer</strong><span>{previewData.accountLabel || 'Source account'} → {previewData.destinationAccount || 'Destination account'} · excluded from project costs and draw spending.</span></div>}
       </div>
 
-      <details className="panel construction-cost-coverage" open>
+      <details className="panel construction-cost-coverage">
         <summary>
-          <div><p className="eyebrow">Construction documentation</p><h2>Construction costs, invoices &amp; payments</h2></div>
-          <strong>{currency.format(constructionCoverageTotals.total)}</strong>
+          <div><p className="eyebrow">Construction documentation</p><h2>Construction costs, invoices &amp; payments</h2><p className="coverage-overview">{constructionCoverage.length} costs · {constructionCoverageTotals.missingInvoice} missing invoice files</p></div>
+          <div className="coverage-heading-total"><strong>{currency.format(constructionCoverageTotals.total)}</strong><span className="coverage-toggle-label" /></div>
         </summary>
         <div className="construction-coverage-content">
-          <div className="construction-coverage-summary">
-            <div><span>Leaf construction costs</span><strong>{constructionCoverage.length}</strong></div>
-            <div><span>Invoice documented</span><strong>{currency.format(constructionCoverageTotals.invoiceDocumented)}</strong></div>
-            <div><span>Active checks applied</span><strong>{currency.format(constructionCoverageTotals.paid)}</strong></div>
-            <div className={constructionCoverageTotals.missingInvoice ? 'needs-attention' : ''}><span>Missing invoice file</span><strong>{constructionCoverageTotals.missingInvoice}</strong></div>
-          </div>
-          <label className="construction-coverage-filter">Show
-            <select aria-label="Filter construction invoice coverage" value={constructionCoverageFilter} onChange={(event) => setConstructionCoverageFilter(event.target.value)}>
+          <details className="coverage-totals-disclosure">
+            <summary>View documentation totals</summary>
+            <div className="construction-coverage-summary">
+              <div><span>Construction costs</span><strong>{constructionCoverage.length}</strong></div>
+              <div><span>Invoice documented</span><strong>{currency.format(constructionCoverageTotals.invoiceDocumented)}</strong></div>
+              <div><span>Payments applied</span><strong>{currency.format(constructionCoverageTotals.paid)}</strong></div>
+              <div className={constructionCoverageTotals.missingInvoice ? 'needs-attention' : ''}><span>Missing invoice file</span><strong>{constructionCoverageTotals.missingInvoice}</strong></div>
+            </div>
+          </details>
+          <div className="coverage-toolbar">
+            <label>Search costs<input aria-label="Search construction costs" type="search" value={coverageSearch} placeholder="Payee, cost, invoice…" onChange={(event) => { setCoverageSearch(event.target.value); setCoveragePage(1) }} /></label>
+            <label>Show<select aria-label="Filter construction invoice coverage" value={constructionCoverageFilter} onChange={(event) => { setConstructionCoverageFilter(event.target.value); setCoveragePage(1) }}>
               <option value="all">All construction costs</option>
               <option value="missing_invoice">Missing invoice file</option>
               <option value="with_invoice">Invoice documented</option>
               <option value="unpaid">Unpaid / partially paid</option>
               <option value="paid">Fully paid</option>
-            </select>
-          </label>
+            </select></label>
+            <label>Lot<select aria-label="Filter construction coverage lot" value={coverageLot} onChange={(event) => { setCoverageLot(event.target.value); setCoveragePage(1) }}><option value="all">All lots</option>{coverageLots.map((lot) => <option key={lot}>{lot}</option>)}<option value="unassigned">Unassigned</option></select></label>
+            {coverageSearch || coverageLot !== 'all' || constructionCoverageFilter !== 'all' ? <button type="button" className="secondary-button" onClick={() => { setCoverageSearch(''); setCoverageLot('all'); setConstructionCoverageFilter('all'); setCoveragePage(1) }}>Clear cost filters</button> : null}
+          </div>
           {invoiceUploadMessage ? <p role="status">{invoiceUploadMessage}</p> : null}
+          <div className="coverage-results-heading"><span>{visibleConstructionCoverage.length ? `Showing ${coverageStart + 1}–${Math.min(coverageStart + coveragePageSize, visibleConstructionCoverage.length)}` : 'Showing 0'} of {visibleConstructionCoverage.length} costs</span><label>Per page<select aria-label="Construction costs per page" value={coveragePageSize} onChange={(event) => { setCoveragePageSize(Number(event.target.value)); setCoveragePage(1) }}><option value={10}>10</option><option value={25}>25</option><option value={50}>50</option></select></label></div>
           <div className="construction-coverage-list">
-            {visibleConstructionCoverage.map(({ cost, relatedInvoices, documents, activeChecks, paid, hasInvoice }) => {
+            {pagedConstructionCoverage.map(({ cost, relatedInvoices, documents, activeChecks, paid, hasInvoice }) => {
               const costAmount = Number(cost.amount || 0)
               const remaining = Math.max(0, costAmount - paid)
-              return <article key={cost.costId || cost.id} className={!hasInvoice ? 'missing-invoice' : ''}>
-                <div className="construction-coverage-title"><strong>{cost.name}</strong><strong>{currency.format(costAmount)}</strong></div>
-                <p>{cost.date || 'No date'} · {cost.vendorName || cost.category || 'Vendor/category not set'}{cost.lotAllocations?.length ? ` · ${cost.lotAllocations.map((allocation) => allocation.lot).join(', ')}` : ''}</p>
-                <div className="construction-coverage-badges">
-                  <span className={hasInvoice ? 'complete' : 'warning'}>{hasInvoice ? `${documents.length} invoice file${documents.length === 1 ? '' : 's'}` : 'Invoice file missing'}</span>
-                  <span>{relatedInvoices.length} invoice record{relatedInvoices.length === 1 ? '' : 's'}</span>
-                  <span>{activeChecks.length} active check{activeChecks.length === 1 ? '' : 's'} · {currency.format(paid)} paid</span>
-                  {remaining > 0.009 ? <span className="warning">{currency.format(remaining)} unpaid</span> : <span className="complete">Fully paid</span>}
+              return <details key={cost.costId || cost.id} className={`coverage-cost-row${!hasInvoice ? ' missing-invoice' : ''}`}>
+                <summary aria-label={`View details for ${cost.name}`}>
+                  <div className="coverage-cost-identity"><strong>{cost.name}</strong><span>{cost.date || 'No date'} · {cost.vendorName || cost.category || 'Vendor/category not set'}{cost.lotAllocations?.length ? ` · ${cost.lotAllocations.map((allocation) => allocation.lot).join(', ')}` : ''}</span></div>
+                  <div className="coverage-cost-status"><strong>{currency.format(costAmount)}</strong><div className="construction-coverage-badges">{remaining > 0.009 ? <span className="warning">{currency.format(remaining)} unpaid</span> : <span className="complete">Fully paid</span>}{!hasInvoice ? <span className="warning">Missing invoice</span> : null}</div></div>
+                  <span className="coverage-chevron" aria-hidden="true">›</span>
+                </summary>
+                <div className="coverage-cost-details">
+                  <div className="construction-coverage-badges">
+                    <span className={hasInvoice ? 'complete' : 'warning'}>{hasInvoice ? `${documents.length} invoice file${documents.length === 1 ? '' : 's'}` : 'Invoice file missing'}</span>
+                    <span>{relatedInvoices.length} invoice record{relatedInvoices.length === 1 ? '' : 's'}</span>
+                    <span>{activeChecks.length} active check{activeChecks.length === 1 ? '' : 's'} · {currency.format(paid)} paid</span>
+                  </div>
+                  <div className="button-row">
+                    {documents.length && onOpenDocument ? <button type="button" className="secondary-button" onClick={() => onOpenDocument(documents[0])}>Preview invoice</button> : null}
+                    {onAttachInvoice ? <label className="secondary-button coverage-upload">{invoiceUpload === (cost.costId || cost.id) ? 'Uploading…' : 'Add invoice'}<input aria-label={`Add invoice for ${cost.name}`} type="file" accept="application/pdf,image/*" disabled={invoiceUpload != null} onChange={(event) => attachInvoice(cost, event)} /></label> : null}
+                    {onEditCost ? <button type="button" className="secondary-button" onClick={() => onEditCost(cost.costId || cost.id)}>Edit cost</button> : null}
+                  </div>
                 </div>
-                <div className="button-row">
-                  {onAttachInvoice ? <label className="secondary-button">{invoiceUpload === (cost.costId || cost.id) ? 'Uploading…' : 'Add invoice'}<input aria-label={`Add invoice for ${cost.name}`} type="file" accept="application/pdf,image/*" disabled={invoiceUpload != null} onChange={(event) => attachInvoice(cost, event)} /></label> : null}
-                  {onEditCost ? <button type="button" className="secondary-button" onClick={() => onEditCost(cost.costId || cost.id)}>Edit cost</button> : null}
-                </div>
-                {documents.length && onOpenDocument ? <button type="button" className="secondary-button" onClick={() => onOpenDocument(documents[0])}>Preview invoice</button> : null}
-              </article>
+              </details>
             })}
-            {!visibleConstructionCoverage.length ? <div className="cost-empty-state"><strong>No construction costs match this coverage filter.</strong></div> : null}
+            {!visibleConstructionCoverage.length ? <div className="cost-empty-state"><strong>No construction costs match these filters.</strong></div> : null}
           </div>
+          <nav className="coverage-pagination" aria-label="Construction cost pages"><button type="button" className="secondary-button" disabled={currentCoveragePage === 1} onClick={() => setCoveragePage(currentCoveragePage - 1)}>Previous costs</button><span>Page {currentCoveragePage} of {coveragePageCount}</span><button type="button" className="secondary-button" disabled={currentCoveragePage === coveragePageCount} onClick={() => setCoveragePage(currentCoveragePage + 1)}>Next costs</button></nav>
         </div>
       </details>
 
